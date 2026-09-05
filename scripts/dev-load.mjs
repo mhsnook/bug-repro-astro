@@ -77,11 +77,6 @@ const VARIANTS = [
 		description: "package.json and lockfile exactly as committed",
 	},
 	{
-		id: "optimizedeps-include",
-		description: "pre-bundle astro/app/manifest instead of discovering it late",
-		vite: { ssr: { optimizeDeps: { include: ["astro/app/manifest"] } } },
-	},
-	{
 		id: "emdash-latest",
 		description: "emdash and @emdash-cms/cloudflare at latest",
 		install: { emdash: "latest", "@emdash-cms/cloudflare": "latest" },
@@ -690,14 +685,22 @@ if (args.compare) {
 const selected =
 	args.variants === "all"
 		? VARIANTS
-		: (args.variants ?? "baseline").split(",").map((id) => {
-				const found = VARIANTS.find((v) => v.id === id.trim());
-				if (!found) {
-					console.error(`Unknown variant "${id}". Known: ${VARIANTS.map((v) => v.id).join(", ")}`);
+		: (() => {
+				const asked = (args.variants ?? "baseline").split(",").map((id) => id.trim());
+				const found = asked
+					.map((id) => VARIANTS.find((v) => v.id === id))
+					.filter((v, i) => {
+						// A retired variant left behind in a caller's default should not
+						// take the whole run down with it.
+						if (!v) console.error(`Skipping unknown variant "${asked[i]}".`);
+						return Boolean(v);
+					});
+				if (found.length === 0) {
+					console.error(`No known variants in "${asked.join(",")}". Known: ${VARIANTS.map((v) => v.id).join(", ")}`);
 					process.exit(2);
 				}
 				return found;
-			});
+			})();
 
 const results = [];
 for (const variant of selected) {
