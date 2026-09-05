@@ -42,6 +42,21 @@ database and loads `seed/seed.json`.
 
 Other scripts: `pnpm build`, `pnpm preview`, `pnpm typecheck`.
 
+## Measuring dev server load times
+
+`scripts/measure-dev-load.mjs` starts the dev server, records whether it survived
+startup, and times a few requests to the admin, home and posts routes:
+
+```bash
+pnpm measure:dev-load
+```
+
+It prints a table of first/median/max response times and writes JSON with
+`--out=<path>`. The `Dev server load` workflow runs it on every pull request
+across Linux, macOS and Windows runners — each installs its own workerd binary
+through the normal postinstall — and `scripts/compare-dev-load.mjs` joins the
+three results into one table in the job summary.
+
 ## Deploying
 
 One-time setup in your Cloudflare account (names must match `wrangler.jsonc`):
