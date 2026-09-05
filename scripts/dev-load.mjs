@@ -265,10 +265,38 @@ async function startDevServer(configPath) {
 		);
 		if (!ready) console.log(tailDevLog().replace(/^/gm, "    "));
 		if (ready) return { ready: true, attempts };
-		await astro(["dev", "stop"]);
-		await sleep(2_000);
+		await stopDevServer();
 	}
 	return { ready: false, attempts };
+}
+
+// `astro dev stop` returns before workerd has exited, and Windows will not
+// delete files a live process still holds open.
+async function stopDevServer() {
+	await astro(["dev", "stop"]);
+	for (let i = 0; i < 20; i++) {
+		const { out } = await astro(["dev", "status"]);
+		if (/No dev server is running/.test(out)) break;
+		await sleep(500);
+	}
+	await sleep(1_000);
+}
+
+function clearCaches() {
+	const failed = [];
+	for (const dir of [".astro", ".wrangler", "node_modules/.vite"]) {
+		try {
+			rmSync(join(projectRoot, dir), {
+				recursive: true,
+				force: true,
+				maxRetries: 20,
+				retryDelay: 250,
+			});
+		} catch (err) {
+			failed.push(`${dir} (${err.code ?? err.message})`);
+		}
+	}
+	return failed;
 }
 
 async function processStats(pid) {
@@ -329,9 +357,10 @@ async function measureVariant(variant) {
 		configFile = writeVariantConfig(variant);
 
 		// D1 persists under .wrangler in the project, so this is also a fresh database.
-		await astro(["dev", "stop"]);
-		for (const dir of [".astro", ".wrangler", "node_modules/.vite"]) {
-			rmSync(join(projectRoot, dir), { recursive: true, force: true });
+		await stopDevServer();
+		const cacheFailures = clearCaches();
+		if (cacheFailures.length) {
+			console.log(`  could not clear ${cacheFailures.join(", ")} — this run is not cold`);
 		}
 
 		const versions = installedVersions();
@@ -341,6 +370,7 @@ async function measureVariant(variant) {
 				...variant,
 				versions,
 				startup: summariseStartup(startup),
+				cacheFailures,
 				setup: null,
 				routes: [],
 				signals: logSignals(),
@@ -388,7 +418,7 @@ async function measureVariant(variant) {
 
 		const stats = await processStats(await devServerPid());
 		const signals = logSignals();
-		await astro(["dev", "stop"]);
+		await stopDevServer();
 
 		const healthy = setup.status === 200 && routes.every((r) => r.complete);
 		const timed = routes.filter((r) => r.medianMs !== null);
@@ -404,6 +434,7 @@ async function measureVariant(variant) {
 			...variant,
 			versions,
 			startup: summariseStartup(startup),
+			cacheFailures,
 			setup: { status: setup.status, ms: setup.ms },
 			routes,
 			signals,
@@ -413,7 +444,7 @@ async function measureVariant(variant) {
 			verdict,
 		};
 	} finally {
-		await astro(["dev", "stop"]);
+		await stopDevServer();
 		if (configFile) rmSync(configFile.path, { force: true });
 		if (installed) {
 			restoreInstall();
@@ -617,6 +648,7 @@ const md = [
 		if (v.signals?.staleChunk) notes.push(`${v.signals.staleChunk}× stale optimizer chunk`);
 		if (v.signals?.lateDeps?.length) notes.push(`late deps: ${v.signals.lateDeps.join(", ")}`);
 		if (v.process) notes.push(`idle ${v.process.cpuPercent}% cpu, ${v.process.rssMb} MB`);
+		if (v.cacheFailures?.length) notes.push(`**not a cold start**: ${v.cacheFailures.join(", ")} survived`);
 		return notes.length ? [`- \`${v.id}\`: ${notes.join(" · ")}`] : [];
 	}),
 ].join("\n");
