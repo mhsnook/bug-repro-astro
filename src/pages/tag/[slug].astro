@@ -1,6 +1,5 @@
 ---
 import { getTerm, getEmDashCollection, decodeSlug } from "emdash";
-import { Image } from "emdash/ui";
 import Base from "../../layouts/Base.astro";
 
 const slug = decodeSlug(Astro.params.slug);
@@ -31,9 +30,6 @@ const { entries: posts } = await getEmDashCollection("posts", {
 				{posts.map((post) => (
 					<li>
 						<a href={`/posts/${post.id}`}>
-							{post.data.featured_image && (
-								<Image image={post.data.featured_image} />
-							)}
 							<h2>{post.data.title}</h2>
 						</a>
 						{post.data.excerpt && <p>{post.data.excerpt}</p>}
