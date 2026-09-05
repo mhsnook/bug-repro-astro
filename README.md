@@ -56,7 +56,7 @@ It prints a verdict — `AFFECTED` or `NOT AFFECTED` — and the numbers behind 
 
 ## What the script measures
 
-`scripts/dev-load.mjs` starts the dev server from a clean cache, completes
+`repro-scripts/dev-load.mjs` starts the dev server from a clean cache, completes
 setup through the dev-bypass endpoint so the admin dashboard is reachable
 rather than redirecting to sign-in, then times the admin, home and posts
 routes.
@@ -111,7 +111,7 @@ The `Dev server load` workflow runs the same script on every pull request
 across Linux, macOS and Windows on Node 22 and Node 26. Operating system and
 Node version are the matrix, since those need separate runners; variants run
 inside each leg, where a pnpm install is all it costs. Each leg uploads its
-JSON, and `node scripts/dev-load.mjs --compare=results` joins them into one
+JSON, and `node repro-scripts/dev-load.mjs --compare=results` joins them into one
 table per variant in the job summary.
 
 The comparison closes with which legs reproduced anything. This repo exists to

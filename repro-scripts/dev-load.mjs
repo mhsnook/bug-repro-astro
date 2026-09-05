@@ -11,9 +11,9 @@
 //     is why this script completes setup before it measures anything.
 //
 // Usage:
-//   node scripts/dev-load.mjs                        # baseline only
-//   node scripts/dev-load.mjs --variants=all
-//   node scripts/dev-load.mjs --compare=results      # join JSON from CI legs
+//   node repro-scripts/dev-load.mjs                        # baseline only
+//   node repro-scripts/dev-load.mjs --variants=all
+//   node repro-scripts/dev-load.mjs --compare=results      # join JSON from CI legs
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import {
