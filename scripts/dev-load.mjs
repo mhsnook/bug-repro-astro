@@ -523,17 +523,23 @@ if (args.compare) {
 	// A leg earns its place in the matrix by showing at least one symptom.
 	const symptomsOf = (run) => {
 		const seen = new Set();
+		// Worst across variants, counted once: two variants seeing 2 and 3 slow
+		// routes is one symptom at its worst, not two separate findings.
+		let slowest = 0;
 		for (const v of run.variants) {
 			if (!v.startup?.ready) seen.add("dev server dead");
 			else if (v.startup.coldStartCrashed) seen.add("cold-start crash");
 			if (!v.healthy) seen.add("broken setup");
-			const bad = v.routes.reduce((n, r) => n + r.badSamples.length, 0);
-			if (bad) seen.add("non-200 or empty responses");
-			const slow = v.routes.filter(
-				(r) => r.medianMs !== null && r.medianMs >= run.settings.thresholdMs,
+			if (v.routes.reduce((n, r) => n + r.badSamples.length, 0)) {
+				seen.add("non-200 or empty responses");
+			}
+			slowest = Math.max(
+				slowest,
+				v.routes.filter((r) => r.medianMs !== null && r.medianMs >= run.settings.thresholdMs)
+					.length,
 			);
-			if (slow.length) seen.add(`${slow.length} slow route${slow.length === 1 ? "" : "s"}`);
 		}
+		if (slowest) seen.add(`up to ${slowest} slow route${slowest === 1 ? "" : "s"}`);
 		return [...seen];
 	};
 
