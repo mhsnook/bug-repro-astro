@@ -16,14 +16,4 @@
 			"bucket_name": "astro-emdash-dev-repro-media",
 		},
 	],
-	// Worker Loader for plugin sandboxing
-	"worker_loaders": [
-		{
-			"binding": "LOADER",
-		},
-	],
-	// General maintenance plus the bounded Media Usage lane (see src/worker.ts)
-	"triggers": {
-		"crons": ["* * * * *", "*/2 * * * *"],
-	},
 }
