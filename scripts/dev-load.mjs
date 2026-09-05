@@ -521,6 +521,14 @@ if (args.compare) {
 	}
 
 	// A leg earns its place in the matrix by showing at least one symptom.
+	// Page loads land in one of two places, with nothing in between: a fraction
+	// of a second, or seconds. The threshold sits in that gap.
+	const rendersOf = (run) => {
+		const timed = run.variants.flatMap((v) => v.routes.filter((r) => r.medianMs !== null));
+		if (timed.length === 0) return "—";
+		return timed.some((r) => r.medianMs >= run.settings.thresholdMs) ? "**failing**" : "working";
+	};
+
 	const symptomsOf = (run) => {
 		const seen = new Set();
 		// Worst across variants, counted once: two variants seeing 2 and 3 slow
@@ -580,9 +588,16 @@ if (args.compare) {
 		"variant is not evidence of health, it is a leg with nothing to report,",
 		"and it can come out of the matrix.",
 		"",
-		"| platform | symptoms |",
-		"| --- | --- |",
-		...runs.map((r) => `| ${r.label} | ${symptomsOf(r).join(", ") || "**none**" } |`),
+		"Renders are read as a verdict, not a score. Sub-second is what a hosted",
+		"worker should do and counts as working. Nothing lands between that and",
+		"the several seconds the failing platforms take, so the gap does the",
+		"classifying and run-to-run noise never decides it.",
+		"",
+		"| platform | renders | symptoms |",
+		"| --- | --- | --- |",
+		...runs.map(
+			(r) => `| ${r.label} | ${rendersOf(r)} | ${symptomsOf(r).join(", ") || "**none**"} |`,
+		),
 		"",
 		(() => {
 			const clean = runs.filter((r) => symptomsOf(r).length === 0).map((r) => r.label);
