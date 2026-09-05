@@ -44,18 +44,29 @@ Other scripts: `pnpm build`, `pnpm preview`, `pnpm typecheck`.
 
 ## Measuring dev server load times
 
-`scripts/measure-dev-load.mjs` starts the dev server, records whether it survived
-startup, and times a few requests to the admin, home and posts routes:
+The dev server here is slow, and it is not slow everywhere. To find out whether
+your setup is affected, run:
 
 ```bash
 pnpm measure:dev-load
 ```
 
-It prints a table of first/median/max response times and writes JSON with
-`--out=<path>`. The `Dev server load` workflow runs it on every pull request
-across Linux, macOS and Windows runners — each installs its own workerd binary
-through the normal postinstall — and `scripts/compare-dev-load.mjs` joins the
-three results into one table in the job summary.
+`scripts/measure-dev-load.mjs` starts the dev server, records whether it
+survived startup, and times the admin, home and posts routes. It keeps
+requesting each route until it has collected the requested number of 200s —
+this server also serves intermittent 404s, and counting one of those as a fast
+response would hide the problem rather than show it. Non-200 responses are
+reported separately, and a route that cannot produce enough 200s is flagged
+rather than timed.
+
+Flags: `--repeats` (200s wanted per route, default 3), `--max-bad` (non-200s
+tolerated before giving up on a route, default 3), `--threshold` (the
+slow-verdict line in ms, default 5000), `--out` (write the results as JSON).
+
+The `Dev server load` workflow runs the same script on every pull request
+across Linux, macOS and Windows runners — each installs its own workerd
+binary through the normal postinstall — and `scripts/compare-dev-load.mjs`
+joins the results into one table in the job summary.
 
 ## Deploying
 

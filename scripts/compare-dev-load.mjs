@@ -18,25 +18,28 @@ const seconds = (ms) => `${(ms / 1000).toFixed(2)}s`;
 const paths = [...new Set(runs.flatMap((r) => r.routes.map((x) => x.path)))];
 const cell = (run, path) => {
 	const route = run.routes.find((x) => x.path === path);
-	return route ? seconds(route.medianMs) : "—";
+	if (!route || route.medianMs === null) return "—";
+	// A route that needed extra attempts to collect its 200s is worth seeing next to its median.
+	return seconds(route.medianMs) + (route.badSamples.length ? ` (${route.badSamples.length} ✗)` : "");
 };
 
 const md = [
 	"## Dev server load times by platform",
 	"",
-	`Median of ${runs[0].repeats} requests per route, Astro dev server on workerd.`,
+	`Median of ${runs[0].repeats} successful 200s per route, Astro dev server on workerd.`,
+	"Non-200 responses are excluded from the medians; `n ✗` counts how many were thrown away.",
 	"",
 	`| route | ${runs.map((r) => r.label).join(" | ")} |`,
 	`| --- | ${runs.map(() => "---").join(" | ")} |`,
 	...paths.map((p) => `| \`${p}\` | ${runs.map((r) => cell(r, p)).join(" | ")} |`),
 	"",
-	"| platform | verdict | cold start | workerd |",
-	"| --- | --- | --- | --- |",
+	"| platform | verdict | cold start | non-200s | workerd |",
+	"| --- | --- | --- | --- | --- |",
 	...runs.map(
 		(r) =>
 			`| ${r.label} | ${r.verdict} | ${
 				r.startup.coldStartCrashed ? `crashed, ready on attempt ${r.startup.attemptsUsed}` : "ok"
-			} | ${r.workerd ?? "unknown"} |`,
+			} | ${r.badTotal ?? 0} | ${r.workerd ?? "unknown"} |`,
 	),
 ].join("\n");
 

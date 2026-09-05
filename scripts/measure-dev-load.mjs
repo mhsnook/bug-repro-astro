@@ -26,6 +26,7 @@ const REQUEST_TIMEOUT_MS = Number(args["request-timeout"] ?? 60_000);
 const STARTUP_TIMEOUT_MS = Number(args["startup-timeout"] ?? 90_000);
 const START_ATTEMPTS = Number(args["start-attempts"] ?? 2);
 const SLOW_THRESHOLD_MS = Number(args.threshold ?? 5_000);
+const MAX_BAD = Number(args["max-bad"] ?? 3);
 const LABEL = args.label ?? `${process.platform}-${process.arch}`;
 const OUT = args.out ? resolve(args.out) : null;
 
@@ -144,35 +145,67 @@ const routes = [];
 
 if (startup.ready) {
 	for (const route of ROUTES) {
-		const samples = [];
-		for (let i = 0; i < REPEATS; i++) {
+		// Keep going until REPEATS responses actually came back 200. This dev server
+		// serves intermittent 404s, and a fast 404 would drag the median down.
+		const ok = [];
+		const bad = [];
+		while (ok.length < REPEATS && bad.length < MAX_BAD) {
 			const sample = await time(`${ORIGIN}${route.path}`);
-			samples.push(sample);
+			(sample.status === 200 ? ok : bad).push(sample);
 			console.log(
-				`${route.path} #${i + 1}: ${sample.status ?? "ERR"} in ${seconds(sample.ms)}s` +
+				`${route.path} ${sample.status === 200 ? `#${ok.length}` : "!!"}: ${
+					sample.status ?? "ERR"
+				} in ${seconds(sample.ms)}s` +
+					(sample.status === 200 ? "" : " — not counted in timings") +
 					(sample.error ? ` (${sample.error})` : ""),
 			);
 		}
-		const ms = samples.map((s) => s.ms);
+		const ms = ok.map((s) => s.ms);
 		routes.push({
 			...route,
-			samples,
-			finalUrl: samples.find((s) => s.finalUrl)?.finalUrl ?? null,
-			firstMs: ms[0],
-			medianMs: [...ms].sort((a, b) => a - b)[Math.floor(ms.length / 2)],
-			maxMs: Math.max(...ms),
-			failures: samples.filter((s) => s.status === null).length,
+			wanted: REPEATS,
+			ok: ok.length,
+			complete: ok.length === REPEATS,
+			attempts: ok.length + bad.length,
+			okSamples: ok,
+			badSamples: bad.map((s) => ({ status: s.status, ms: s.ms, error: s.error })),
+			finalUrl: ok.find((s) => s.finalUrl)?.finalUrl ?? null,
+			firstMs: ms[0] ?? null,
+			medianMs: ms.length ? [...ms].sort((a, b) => a - b)[Math.floor(ms.length / 2)] : null,
+			maxMs: ms.length ? Math.max(...ms) : null,
 		});
 	}
 	await astro(["dev", "stop"]);
 }
 
-const worst = routes.length ? Math.max(...routes.map((r) => r.medianMs)) : null;
+// e.g. "404×2, timeout×1" — what came back that was not a 200.
+function badSummary(route) {
+	if (route.badSamples.length === 0) return "—";
+	const counts = new Map();
+	for (const s of route.badSamples) {
+		const key = s.status ?? (s.error?.startsWith("timeout") ? "timeout" : "error");
+		counts.set(key, (counts.get(key) ?? 0) + 1);
+	}
+	return [...counts].map(([k, n]) => `${k}×${n}`).join(", ");
+}
+
+const timed = routes.filter((r) => r.medianMs !== null);
+const worst = timed.length ? Math.max(...timed.map((r) => r.medianMs)) : null;
+const starved = routes.filter((r) => !r.complete);
+const badTotal = routes.reduce((n, r) => n + r.badSamples.length, 0);
+
+const timingVerdict =
+	worst === null
+		? "no timings - no route returned a single 200"
+		: worst >= SLOW_THRESHOLD_MS
+			? `SLOW - worst median ${seconds(worst)}s, over the ${seconds(SLOW_THRESHOLD_MS)}s threshold`
+			: `FAST - worst median ${seconds(worst)}s, under the ${seconds(SLOW_THRESHOLD_MS)}s threshold`;
+
 const verdict = !startup.ready
 	? "DEAD - dev server never became ready"
-	: worst >= SLOW_THRESHOLD_MS
-		? `SLOW - worst median ${seconds(worst)}s, over the ${seconds(SLOW_THRESHOLD_MS)}s threshold`
-		: `FAST - worst median ${seconds(worst)}s, under the ${seconds(SLOW_THRESHOLD_MS)}s threshold`;
+	: starved.length
+		? `FLAKY (${starved.map((r) => `${r.path} gave up at ${r.ok}/${r.wanted} 200s`).join("; ")}) + ${timingVerdict}`
+		: timingVerdict;
 
 const workerdVersion = (() => {
 	const platformPkg = {
@@ -211,24 +244,31 @@ const result = {
 		attempts: startup.attempts,
 	},
 	routes,
+	badTotal,
 	verdict,
 };
+
+const fmt = (v) => (v === null ? "—" : `${seconds(v)}s`);
 
 const md = [
 	`### ${LABEL} - ${verdict}`,
 	"",
 	`Node ${process.version} · workerd ${workerdVersion ?? "unknown"} · cold start ${
 		result.startup.coldStartCrashed ? "**crashed**, retried" : "OK"
-	} · ${REPEATS} requests per route`,
+	} · ${REPEATS} successful 200s wanted per route, at most ${MAX_BAD} non-200s tolerated`,
 	"",
-	"| route | status | first | median | max |",
-	"| --- | --- | --- | --- | --- |",
+	"| route | 200s | first | median | max | non-200 |",
+	"| --- | --- | --- | --- | --- | --- |",
 	...routes.map(
 		(r) =>
-			`| \`${r.path}\` | ${r.samples[0].status ?? "ERR"} | ${seconds(r.firstMs)}s | **${seconds(
+			`| \`${r.path}\` | ${r.ok}/${r.wanted}${r.complete ? "" : " ⚠"} | ${fmt(r.firstMs)} | **${fmt(
 				r.medianMs,
-			)}s** | ${seconds(r.maxMs)}s |`,
+			)}** | ${fmt(r.maxMs)} | ${badSummary(r)} |`,
 	),
+	"",
+	badTotal === 0
+		? "Every request came back 200."
+		: `**${badTotal} non-200 response${badTotal === 1 ? "" : "s"}** across all routes, excluded from the timings above.`,
 ].join("\n");
 
 console.log(`\n${md}\n`);
