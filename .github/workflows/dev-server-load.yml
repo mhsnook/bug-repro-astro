@@ -56,6 +56,42 @@ jobs:
           path: dev-load-*.json
           if-no-files-found: warn
 
+  # The bare reproduction in repro/bare-cloudflare-vite has no framework and no
+  # bindings. It counts how often a plugin's hotUpdate hook runs while nothing is
+  # edited, which is a property of the platform's file watcher, so it is measured
+  # per OS rather than assumed.
+  watcher:
+    name: watcher events on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: repro/bare-cloudflare-vite
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Count hotUpdate hooks fired with nothing edited
+        run: node count-hot-updates.mjs --out="watcher-${{ matrix.os }}.json"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: watcher-${{ matrix.os }}
+          path: repro/bare-cloudflare-vite/watcher-*.json
+          if-no-files-found: warn
+
   report:
     name: comparison
     needs: measure
