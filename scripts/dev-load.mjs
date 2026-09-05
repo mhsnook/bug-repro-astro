@@ -517,7 +517,8 @@ async function postComment(markdown) {
 		console.log("Not a pull request build with a token; skipping the comment.");
 		return;
 	}
-	const pr = JSON.parse(readFileSync(eventPath, "utf8")).pull_request?.number;
+	const event = JSON.parse(readFileSync(eventPath, "utf8"));
+	const pr = event.pull_request?.number;
 	if (!pr) {
 		console.log("No pull request in the event payload; skipping the comment.");
 		return;
@@ -537,7 +538,9 @@ async function postComment(markdown) {
 
 	const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
 	const runUrl = `${server}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-	const sha = process.env.GITHUB_SHA ?? "";
+	// GITHUB_SHA is the throwaway merge commit on a pull_request event, and it
+	// exists on no branch. The head sha is the one worth printing.
+	const sha = event.pull_request?.head?.sha ?? process.env.GITHUB_SHA ?? "";
 	const body = [
 		COMMENT_MARKER,
 		markdown,
