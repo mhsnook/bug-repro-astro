@@ -83,6 +83,11 @@ const VARIANTS = [
 		description: "package.json and lockfile exactly as committed",
 	},
 	{
+		id: "watch-ignore-wrangler",
+		description: "keep Vite's file watcher out of .wrangler, where Miniflare writes state on every request",
+		vite: { server: { watch: { ignored: ["**/.wrangler/**"] } } },
+	},
+	{
 		id: "emdash-latest",
 		description: "emdash and @emdash-cms/cloudflare at latest",
 		install: { emdash: "latest", "@emdash-cms/cloudflare": "latest" },
@@ -102,10 +107,15 @@ const LOG_SIGNATURES = [
 	["unresolved", "Unable to resolve"],
 ];
 
+// /plain and /bare-query are controls: an Astro page with no EmDash in it, and
+// one with a single collection query and nothing else. Where the time lands
+// between those and the real pages says which layer is slow.
 const ROUTES = [
 	{ path: "/_emdash/admin", name: "admin" },
 	{ path: "/", name: "home" },
 	{ path: "/posts", name: "posts" },
+	{ path: "/plain", name: "plain" },
+	{ path: "/bare-query", name: "bare-query" },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -311,12 +321,29 @@ function clearCaches() {
 	return failed;
 }
 
+// ps's pcpu is CPU time over the process's whole life, which after a slow
+// startup reads as a busy server even when it is asleep. Sample cumulative
+// CPU time twice instead and report the rate over the gap.
 async function processStats(pid) {
 	if (!pid || process.platform === "win32") return null;
-	const { out, code } = await run("ps", ["-o", "pcpu=,rss=", "-p", String(pid)], { timeout: 10_000 });
-	if (code !== 0) return null;
-	const [pcpu, rss] = out.trim().split(/\s+/);
-	return { cpuPercent: Number(pcpu), rssMb: Math.round(Number(rss) / 1024) };
+	const sample = async () => {
+		const { out, code } = await run("ps", ["-o", "time=,rss=", "-p", String(pid)], { timeout: 10_000 });
+		if (code !== 0) return null;
+		const [time, rss] = out.trim().split(/\s+/);
+		const parts = time.split(/[:.]/).map(Number);
+		const cpuSeconds = parts.reduce((total, part) => total * 60 + part, 0);
+		return { cpuSeconds, rssMb: Math.round(Number(rss) / 1024) };
+	};
+	const before = await sample();
+	if (!before) return null;
+	const gapMs = 3_000;
+	await sleep(gapMs);
+	const after = await sample();
+	if (!after) return null;
+	return {
+		cpuPercent: Math.round(((after.cpuSeconds - before.cpuSeconds) / (gapMs / 1000)) * 100),
+		rssMb: after.rssMb,
+	};
 }
 
 async function devServerPid() {
