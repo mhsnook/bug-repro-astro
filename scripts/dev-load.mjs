@@ -483,6 +483,23 @@ if (args.compare) {
 		process.exit(0);
 	}
 
+	// A leg earns its place in the matrix by showing at least one symptom.
+	const symptomsOf = (run) => {
+		const seen = new Set();
+		for (const v of run.variants) {
+			if (!v.startup?.ready) seen.add("dev server dead");
+			else if (v.startup.coldStartCrashed) seen.add("cold-start crash");
+			if (!v.healthy) seen.add("broken setup");
+			const bad = v.routes.reduce((n, r) => n + r.badSamples.length, 0);
+			if (bad) seen.add("non-200 or empty responses");
+			const slow = v.routes.filter(
+				(r) => r.medianMs !== null && r.medianMs >= run.settings.thresholdMs,
+			);
+			if (slow.length) seen.add(`${slow.length} slow route${slow.length === 1 ? "" : "s"}`);
+		}
+		return [...seen];
+	};
+
 	const ids = [...new Set(runs.flatMap((r) => r.variants.map((v) => v.id)))];
 	const paths = [...new Set(runs.flatMap((r) => r.variants.flatMap((v) => v.routes.map((x) => x.path))))];
 	const md = [
@@ -514,6 +531,23 @@ if (args.compare) {
 			}),
 			"",
 		]),
+		"### Which legs reproduce anything",
+		"",
+		"This repo exists to show the bug. A leg that stays clean across every",
+		"variant is not evidence of health, it is a leg with nothing to report,",
+		"and it can come out of the matrix.",
+		"",
+		"| platform | symptoms |",
+		"| --- | --- |",
+		...runs.map((r) => `| ${r.label} | ${symptomsOf(r).join(", ") || "**none**" } |`),
+		"",
+		(() => {
+			const clean = runs.filter((r) => symptomsOf(r).length === 0).map((r) => r.label);
+			return clean.length
+				? `Reproduced nothing, so candidates to strike: ${clean.join(", ")}.`
+				: "Every leg reproduced at least one symptom.";
+		})(),
+		"",
 		"| platform | node | astro | emdash | workerd |",
 		"| --- | --- | --- | --- | --- |",
 		...runs.map((r) => {

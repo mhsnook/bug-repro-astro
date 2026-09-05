@@ -109,6 +109,11 @@ inside each leg, where a pnpm install is all it costs. Each leg uploads its
 JSON, and `node scripts/dev-load.mjs --compare=results` joins them into one
 table per variant in the job summary.
 
+The comparison closes with which legs reproduced anything. This repo exists to
+show the bug, so a leg that stays clean across every variant has nothing to
+report and can come out of the matrix. Variants are the opposite case: one that
+clears the symptoms is the finding, and worth keeping.
+
 ## Deploying
 
 One-time setup in your Cloudflare account (names must match `wrangler.jsonc`):
