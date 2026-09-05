@@ -1,0 +1,11 @@
+{
+  "name": "bare-cf",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "vite" },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.54.2",
+    "vite": "8.2.2",
+    "wrangler": "^4.124.0"
+  }
+}
