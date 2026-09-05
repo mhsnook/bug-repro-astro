@@ -169,7 +169,10 @@ function installedVersions() {
 	const versions = {};
 	for (const name of names) {
 		try {
-			versions[name] = require(join(projectRoot, "node_modules", name, "package.json")).version;
+			// Read, don't require: an install variant rewrites these files in place
+			// and require's cache would report the previous variant's versions.
+			const manifest = join(projectRoot, "node_modules", name, "package.json");
+			versions[name] = JSON.parse(readFileSync(manifest, "utf8")).version;
 		} catch {
 			versions[name] = null;
 		}
