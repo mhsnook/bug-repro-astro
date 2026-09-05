@@ -175,12 +175,35 @@ function logSignals() {
 	return signals;
 }
 
+// The Astro daemon truncates .astro/dev.log on every start, so a crashed first
+// attempt is gone by the time the second one is serving. Each attempt's signals
+// are captured before the next start wipes them, and summed here.
+function mergeSignals(parts) {
+	const merged = { lateDeps: [] };
+	const deps = new Set();
+	for (const part of parts) {
+		if (!part) continue;
+		for (const [key, value] of Object.entries(part)) {
+			if (key === "lateDeps") {
+				for (const d of value) deps.add(d);
+			} else {
+				merged[key] = (merged[key] ?? 0) + value;
+			}
+		}
+	}
+	merged.lateDeps = [...deps];
+	return merged;
+}
+
 function installedVersions() {
 	const names = ["astro", "emdash", "@astrojs/cloudflare", "@emdash-cms/cloudflare"];
 	const versions = {};
 	for (const name of names) {
 		try {
-			versions[name] = require(join(projectRoot, "node_modules", name, "package.json")).version;
+			// Read, don't require: an install variant rewrites these files in place
+			// and require's cache would report the previous variant's versions.
+			const manifest = join(projectRoot, "node_modules", name, "package.json");
+			versions[name] = JSON.parse(readFileSync(manifest, "utf8")).version;
 		} catch {
 			versions[name] = null;
 		}
@@ -279,6 +302,9 @@ async function startDevServer(configPath) {
 			ready,
 			seconds: Number(((Date.now() - startedAt) / 1000).toFixed(2)),
 			devLog: ready ? null : tailDevLog(),
+			// A successful attempt keeps writing while the routes are measured, so
+			// its signals are read after the run instead of here.
+			signals: ready ? null : logSignals(),
 		});
 		console.log(
 			ready
@@ -412,7 +438,7 @@ async function measureVariant(variant) {
 				cacheFailures,
 				setup: null,
 				routes: [],
-				signals: logSignals(),
+				signals: mergeSignals([...startup.attempts.map((a) => a.signals), logSignals()]),
 				process: null,
 				healthy: false,
 				verdict: "DEAD — dev server never became ready",
@@ -456,7 +482,7 @@ async function measureVariant(variant) {
 		}
 
 		const stats = await processStats(await devServerPid());
-		const signals = logSignals();
+		const signals = mergeSignals([...startup.attempts.map((a) => a.signals), logSignals()]);
 		await stopDevServer();
 
 		const healthy = setup.status === 200 && routes.every((r) => r.complete);
