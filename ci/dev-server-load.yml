@@ -1,0 +1,81 @@
+name: Dev server load
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: Requests per route
+        default: "3"
+      threshold:
+        description: Slow-verdict threshold in ms
+        default: "5000"
+
+jobs:
+  measure:
+    name: measure (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+          - os: macos-latest
+            label: darwin-arm64
+          - os: windows-latest
+            label: windows-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # No --ignore-scripts: the postinstall is what fetches the platform workerd binary.
+      - run: pnpm install --frozen-lockfile
+
+      - name: Report which workerd got installed
+        shell: bash
+        run: ls node_modules/.pnpm | grep -i workerd || echo "no workerd package found"
+
+      - name: Measure dev server load times
+        shell: bash
+        run: |
+          node scripts/measure-dev-load.mjs \
+            --label='${{ matrix.label }}' \
+            --repeats='${{ inputs.repeats || 3 }}' \
+            --threshold='${{ inputs.threshold || 5000 }}' \
+            --out="dev-load-${{ matrix.label }}.json"
+
+      - name: Dev server daemon log
+        if: always()
+        shell: bash
+        run: cat .astro/dev.log || echo "no .astro/dev.log"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dev-load-${{ matrix.label }}
+          path: dev-load-${{ matrix.label }}.json
+          if-no-files-found: warn
+
+  report:
+    name: comparison
+    needs: measure
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: results
+          pattern: dev-load-*
+          merge-multiple: true
+
+      - run: node scripts/compare-dev-load.mjs results
