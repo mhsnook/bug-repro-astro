@@ -31,7 +31,13 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const astroBin = join(dirname(require.resolve("astro/package.json")), "bin", "astro.mjs");
+// Resolved on demand: --compare only reads JSON, and the job that runs it has
+// no node_modules to resolve against.
+let astroBin;
+const resolveAstroBin = () => {
+	astroBin ??= join(dirname(require.resolve("astro/package.json")), "bin", "astro.mjs");
+	return astroBin;
+};
 const devLogPath = join(projectRoot, ".astro", "dev.log");
 const pkgPath = join(projectRoot, "package.json");
 const lockPath = join(projectRoot, "pnpm-lock.yaml");
@@ -122,7 +128,7 @@ function run(cmd, argv, { timeout = 600_000 } = {}) {
 	});
 }
 
-const astro = (argv) => run(process.execPath, [astroBin, ...argv]);
+const astro = (argv) => run(process.execPath, [resolveAstroBin(), ...argv]);
 // npm_execpath is only set when this runs as a package script; run it through
 // node when it is a JS entry point, and fall back to the shim otherwise.
 const pnpm = (argv) => {
