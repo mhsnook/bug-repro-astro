@@ -12,7 +12,7 @@
     "preview": "astro preview",
     "deploy": "astro build && wrangler deploy",
     "typecheck": "astro check",
-    "measure:dev-load": "node scripts/measure-dev-load.mjs"
+    "dev-load": "node scripts/dev-load.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^14.0.0",
