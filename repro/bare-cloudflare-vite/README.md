@@ -29,12 +29,22 @@ Six requests, nothing edited, on `@cloudflare/vite-plugin` 1.54.2 and vite 8.2.2
 [counts-hot-updates] hotUpdate #30 in env "bare_cf"
 ```
 
-**30 `hotUpdate` invocations for 6 requests** in that run, spread across the three
-environments. `vite.config.ts` contains a plugin that does nothing but count them.
+`vite.config.ts` contains a plugin that does nothing but count `hotUpdate` calls.
 
-The absolute count moves between runs — a second run of the same six requests reported
-66 — because startup writes are included and miniflare's flush timing varies. What does
-not move is that it is many per request and never zero, with nothing edited.
+`count-hot-updates.mjs` reports the same thing with startup separated out, which is the
+number worth quoting:
+
+```
+$ node count-hot-updates.mjs
+### linux
+requests            6, all 200: true
+timings             31ms, 30ms, 23ms, 24ms, 29ms, 27ms
+hotUpdate hooks     18 during requests (3/request)
+files in .wrangler  9
+```
+
+Three per request, every request, with nothing edited. Starting the server accounts for
+another 57, which is expected and not the point.
 
 The writes behind it, with `DEBUG=vite:hmr pnpm dev`:
 
