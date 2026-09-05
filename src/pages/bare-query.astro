@@ -1,0 +1,23 @@
+---
+import { getEmDashCollection } from "emdash";
+
+const { entries: posts, cacheHint } = await getEmDashCollection("posts", {
+	orderBy: { published_at: "desc" },
+});
+if (Astro.cache?.enabled) Astro.cache.set(cacheHint);
+const filler = Array.from({ length: 12 }, (_, i) => `Paragraph ${i + 1} of filler so this page clears the harness's empty-page floor.`);
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>Bare query</title>
+	</head>
+	<body>
+		<h1>Bare query</h1>
+		<p>One getEmDashCollection call, no layout, no site settings, no menu, no images.</p>
+		<ul>{posts.map((post) => <li>{post.data.title}</li>)}</ul>
+		{filler.map((line) => <p>{line}</p>)}
+	</body>
+</html>

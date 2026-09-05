@@ -1,0 +1,16 @@
+---
+const filler = Array.from({ length: 12 }, (_, i) => `Paragraph ${i + 1} of filler so this page clears the harness's empty-page floor.`);
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>Plain</title>
+	</head>
+	<body>
+		<h1>Plain</h1>
+		<p>Server-rendered by Astro with no EmDash imports, no layout, no queries.</p>
+		{filler.map((line) => <p>{line}</p>)}
+	</body>
+</html>
