@@ -19,4 +19,11 @@ export default defineConfig({
 		}),
 	],
 	devToolbar: { enabled: false },
+	vite: {
+		server: {
+			// Miniflare writes local D1 and trace state here on every request. Left
+			// watched, each write makes the dev server rebuild the page.
+			watch: { ignored: ["**/.wrangler/**"] },
+		},
+	},
 });
