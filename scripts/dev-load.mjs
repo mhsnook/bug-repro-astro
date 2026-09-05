@@ -295,7 +295,7 @@ async function stopDevServer() {
 
 function clearCaches() {
 	const failed = [];
-	for (const dir of [".astro", ".wrangler", "node_modules/.vite"]) {
+	for (const dir of [".astro", ".wrangler", "node_modules/.vite", "data.db", "uploads"]) {
 		try {
 			rmSync(join(projectRoot, dir), {
 				recursive: true,

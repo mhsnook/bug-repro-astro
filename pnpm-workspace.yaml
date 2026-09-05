@@ -3,7 +3,7 @@
 allowBuilds:
   esbuild: true
   workerd: true
-  better-sqlite3: false
+  better-sqlite3: true
   sharp: false
 
 # Supply-chain hardening: cooldown on brand-new releases (EmDash exempt)
