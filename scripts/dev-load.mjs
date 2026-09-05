@@ -42,11 +42,17 @@ const devLogPath = join(projectRoot, ".astro", "dev.log");
 const pkgPath = join(projectRoot, "package.json");
 const lockPath = join(projectRoot, "pnpm-lock.yaml");
 
+// An empty flag counts as absent, so a caller can pass an unset value straight
+// through (`--variants="$VARIANTS"`) and get the default below rather than
+// having to carry a copy of it.
 const args = Object.fromEntries(
-	process.argv.slice(2).map((a) => {
-		const [k, v = "true"] = a.replace(/^--/, "").split("=");
-		return [k, v];
-	}),
+	process.argv
+		.slice(2)
+		.map((a) => {
+			const [k, v = "true"] = a.replace(/^--/, "").split("=");
+			return [k, v];
+		})
+		.filter(([, v]) => v !== ""),
 );
 
 const PORT = Number(args.port ?? 4321);

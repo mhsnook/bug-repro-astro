@@ -5,15 +5,15 @@ on:
   workflow_dispatch:
     inputs:
       variants:
-        description: Comma-separated variant ids, or "all"
-        default: baseline
+        description: Comma-separated variant ids, or "all". Blank uses the script's default.
       repeats:
-        description: Healthy 200s wanted per route
-        default: "3"
+        description: Healthy 200s wanted per route. Blank uses the script's default.
 
-# Everything below is wiring. What gets measured, how it is judged and how the
-# report reaches the pull request all live in scripts/dev-load.mjs, so changing
-# any of that is an ordinary push.
+# Everything below is wiring: triggers, the matrix, and the steps. What gets
+# measured, which variants run by default, how many samples, how it is judged
+# and how the report reaches the pull request all live in scripts/dev-load.mjs.
+# Blank inputs pass straight through, so the defaults are the script's and this
+# file does not carry a copy of them.
 jobs:
   measure:
     name: ${{ matrix.os }} node ${{ matrix.node }}
@@ -40,8 +40,8 @@ jobs:
       - name: Measure
         shell: bash
         env:
-          VARIANTS: ${{ inputs.variants || 'baseline' }}
-          REPEATS: ${{ inputs.repeats || '3' }}
+          VARIANTS: ${{ inputs.variants }}
+          REPEATS: ${{ inputs.repeats }}
         run: node scripts/dev-load.mjs --variants="$VARIANTS" --repeats="$REPEATS"
 
       - name: Dev server daemon log
