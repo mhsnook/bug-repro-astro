@@ -42,11 +42,17 @@ const devLogPath = join(projectRoot, ".astro", "dev.log");
 const pkgPath = join(projectRoot, "package.json");
 const lockPath = join(projectRoot, "pnpm-lock.yaml");
 
+// An empty flag counts as absent, so a caller can pass an unset value straight
+// through (`--variants="$VARIANTS"`) and get the default below rather than
+// having to carry a copy of it.
 const args = Object.fromEntries(
-	process.argv.slice(2).map((a) => {
-		const [k, v = "true"] = a.replace(/^--/, "").split("=");
-		return [k, v];
-	}),
+	process.argv
+		.slice(2)
+		.map((a) => {
+			const [k, v = "true"] = a.replace(/^--/, "").split("=");
+			return [k, v];
+		})
+		.filter(([, v]) => v !== ""),
 );
 
 const PORT = Number(args.port ?? 4321);
@@ -75,11 +81,6 @@ const VARIANTS = [
 	{
 		id: "baseline",
 		description: "package.json and lockfile exactly as committed",
-	},
-	{
-		id: "optimizedeps-include",
-		description: "pre-bundle astro/app/manifest instead of discovering it late",
-		vite: { ssr: { optimizeDeps: { include: ["astro/app/manifest"] } } },
 	},
 	{
 		id: "watch-ignore-wrangler",
@@ -717,14 +718,22 @@ if (args.compare) {
 const selected =
 	args.variants === "all"
 		? VARIANTS
-		: (args.variants ?? "baseline").split(",").map((id) => {
-				const found = VARIANTS.find((v) => v.id === id.trim());
-				if (!found) {
-					console.error(`Unknown variant "${id}". Known: ${VARIANTS.map((v) => v.id).join(", ")}`);
+		: (() => {
+				const asked = (args.variants ?? "baseline").split(",").map((id) => id.trim());
+				const found = asked
+					.map((id) => VARIANTS.find((v) => v.id === id))
+					.filter((v, i) => {
+						// A retired variant left behind in a caller's default should not
+						// take the whole run down with it.
+						if (!v) console.error(`Skipping unknown variant "${asked[i]}".`);
+						return Boolean(v);
+					});
+				if (found.length === 0) {
+					console.error(`No known variants in "${asked.join(",")}". Known: ${VARIANTS.map((v) => v.id).join(", ")}`);
 					process.exit(2);
 				}
 				return found;
-			});
+			})();
 
 const results = [];
 for (const variant of selected) {
