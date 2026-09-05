@@ -60,8 +60,13 @@ const REQUEST_TIMEOUT_MS = Number(args["request-timeout"] ?? 60_000);
 const STARTUP_TIMEOUT_MS = Number(args["startup-timeout"] ?? 120_000);
 const START_ATTEMPTS = Number(args["start-attempts"] ?? 2);
 const SLOW_THRESHOLD_MS = Number(args.threshold ?? 5_000);
-const LABEL = args.label ?? `${process.platform}-${process.arch}`;
-const OUT = args.out ? resolve(args.out) : null;
+// In CI the leg names itself, so the workflow carries no --label or --out and
+// stays untouched when the reporting changes.
+const CI_LEG = process.env.GITHUB_ACTIONS
+	? `${(process.env.RUNNER_OS ?? process.platform).toLowerCase()}-node${process.versions.node.split(".")[0]}`
+	: null;
+const LABEL = args.label ?? CI_LEG ?? `${process.platform}-${process.arch}`;
+const OUT = args.out ? resolve(args.out) : CI_LEG ? resolve(`dev-load-${CI_LEG}.json`) : null;
 
 // A variant is a way of setting this project up. `install` swaps npm packages
 // (a pnpm reinstall, far cheaper than another CI runner); `vite` is applied
@@ -499,6 +504,64 @@ function variantTable(variants) {
 	];
 }
 
+// Upserts one comment on the pull request, keyed on a marker, so each run
+// replaces the last rather than stacking. Lives here rather than in the
+// workflow so a change to it is an ordinary push.
+const COMMENT_MARKER = "<!-- dev-load-report -->";
+
+async function postComment(markdown) {
+	const token = process.env.GITHUB_TOKEN;
+	const repo = process.env.GITHUB_REPOSITORY;
+	const eventPath = process.env.GITHUB_EVENT_PATH;
+	if (!token || !repo || !eventPath || !existsSync(eventPath)) {
+		console.log("Not a pull request build with a token; skipping the comment.");
+		return;
+	}
+	const pr = JSON.parse(readFileSync(eventPath, "utf8")).pull_request?.number;
+	if (!pr) {
+		console.log("No pull request in the event payload; skipping the comment.");
+		return;
+	}
+
+	const base = process.env.GITHUB_API_URL ?? "https://api.github.com";
+	const api = (path, init = {}) =>
+		fetch(`${base}/repos/${repo}${path}`, {
+			...init,
+			headers: {
+				authorization: `Bearer ${token}`,
+				accept: "application/vnd.github+json",
+				"content-type": "application/json",
+				...init.headers,
+			},
+		});
+
+	const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
+	const runUrl = `${server}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+	const sha = process.env.GITHUB_SHA ?? "";
+	const body = [
+		COMMENT_MARKER,
+		markdown,
+		"",
+		`[Run ${process.env.GITHUB_RUN_NUMBER}](${runUrl})${sha ? ` on \`${sha}\`` : ""}.`,
+	].join("\n");
+
+	// Walk every page: the marker can sit anywhere in a long thread.
+	let existing = null;
+	for (let page = 1; page <= 20 && !existing; page++) {
+		const res = await api(`/issues/${pr}/comments?per_page=100&page=${page}`);
+		if (!res.ok) throw new Error(`listing comments failed: ${res.status} ${await res.text()}`);
+		const batch = await res.json();
+		existing = batch.find((c) => c.body?.startsWith(COMMENT_MARKER)) ?? null;
+		if (batch.length < 100) break;
+	}
+
+	const res = existing
+		? await api(`/issues/comments/${existing.id}`, { method: "PATCH", body: JSON.stringify({ body }) })
+		: await api(`/issues/${pr}/comments`, { method: "POST", body: JSON.stringify({ body }) });
+	if (!res.ok) throw new Error(`posting the comment failed: ${res.status} ${await res.text()}`);
+	console.log(`${existing ? "Updated" : "Posted"} the report comment on #${pr}.`);
+}
+
 // --- compare mode: join the JSON one CI leg per platform leaves behind -------
 if (args.compare) {
 	const dir = resolve(args.compare);
@@ -616,6 +679,7 @@ if (args.compare) {
 
 	console.log(md);
 	if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n\n`);
+	if (args.comment) await postComment(md);
 	process.exit(0);
 }
 

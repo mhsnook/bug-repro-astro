@@ -98,7 +98,12 @@ so the committed `astro.config.mjs` stays stock. Package variants restore
 Other flags: `--repeats` (good responses wanted per route, default 3),
 `--max-bad` (bad responses tolerated before giving up on a route, default 3),
 `--min-bytes` (the empty-page floor, default 1000), `--threshold` (the slow
-verdict line in ms, default 5000), `--out` (write results as JSON).
+verdict line in ms, default 5000), `--out` (write results as JSON),
+`--comment` (with `--compare`, post the table on the pull request).
+
+Under GitHub Actions the run names itself from the runner and Node version and
+writes its JSON accordingly, so the workflow passes neither `--label` nor
+`--out`.
 
 ## In CI
 

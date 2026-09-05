@@ -11,6 +11,9 @@ on:
         description: Healthy 200s wanted per route
         default: "3"
 
+# Everything below is wiring. What gets measured, how it is judged and how the
+# report reaches the pull request all live in scripts/dev-load.mjs, so changing
+# any of that is an ordinary push.
 jobs:
   measure:
     name: ${{ matrix.os }} node ${{ matrix.node }}
@@ -39,13 +42,7 @@ jobs:
         env:
           VARIANTS: ${{ inputs.variants || 'baseline,optimizedeps-include' }}
           REPEATS: ${{ inputs.repeats || '3' }}
-          LEG: ${{ matrix.os }}-node${{ matrix.node }}
-        run: |
-          node scripts/dev-load.mjs \
-            --label="$LEG" \
-            --variants="$VARIANTS" \
-            --repeats="$REPEATS" \
-            --out="dev-load-$LEG.json"
+        run: node scripts/dev-load.mjs --variants="$VARIANTS" --repeats="$REPEATS"
 
       - name: Dev server daemon log
         if: always()
@@ -56,7 +53,7 @@ jobs:
         if: always()
         with:
           name: dev-load-${{ matrix.os }}-node${{ matrix.node }}
-          path: dev-load-${{ matrix.os }}-node${{ matrix.node }}.json
+          path: dev-load-*.json
           if-no-files-found: warn
 
   report:
@@ -75,29 +72,7 @@ jobs:
           pattern: dev-load-*
           merge-multiple: true
 
-      - name: Compare
-        run: node scripts/dev-load.mjs --compare=results | tee report.md
-
-      - name: Post the table on the pull request
-        if: github.event_name == 'pull_request'
+      - name: Compare and report
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          MARKER='<!-- dev-load-report -->'
-          {
-            echo "$MARKER"
-            cat report.md
-            echo
-            echo "[Run ${{ github.run_number }}]($RUN_URL) on \`${{ github.event.pull_request.head.sha }}\`."
-          } > comment.md
-          # Edit the existing comment rather than stacking one per push.
-          ID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq "[.[] | select(.body | startswith(\"$MARKER\"))] | .[0].id // empty" | head -n1)
-          if [ -n "$ID" ]; then
-            gh api -X PATCH "repos/$REPO/issues/comments/$ID" -F body=@comment.md
-          else
-            gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@comment.md
-          fi
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/dev-load.mjs --compare=results --comment
