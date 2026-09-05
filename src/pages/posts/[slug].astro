@@ -1,6 +1,6 @@
 ---
 import { getEmDashEntry, getSeoMeta, decodeSlug, getSiteSettings } from "emdash";
-import { Image, PortableText, WidgetArea } from "emdash/ui";
+import { PortableText, WidgetArea } from "emdash/ui";
 import Base from "../../layouts/Base.astro";
 import { resolveStarterSiteIdentity } from "../../utils/site-identity";
 
@@ -40,14 +40,6 @@ const categories = post.data.terms?.category ?? [];
 	content={{ collection: "posts", id: post.data.id, slug }}
 >
 	<article>
-		{
-			post.data.featured_image && (
-				<div {...post.edit.featured_image}>
-					<Image image={post.data.featured_image} />
-				</div>
-			)
-		}
-
 		<h1 {...post.edit.title}>{post.data.title}</h1>
 
 		{
