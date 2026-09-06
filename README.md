@@ -1,143 +1,114 @@
-# astro-emdash-dev-repro
+# Two reproductions of one dev-server bug
 
-A website built with [EmDash](https://github.com/emdash-cms/emdash), a full-stack TypeScript CMS on Astro, running on Cloudflare Workers. Scaffolded from the EmDash `starter-cloudflare` template: posts, pages, categories and tags with minimal styling, meant as a base to build on.
+`@cloudflare/vite-plugin` persists Miniflare state under `.wrangler/state`, inside the
+Vite root, and never excludes it from the dev-server watcher. Every request writes there,
+so Vite reports a file change and runs every plugin's `hotUpdate` hook — while nobody has
+edited anything.
 
-## What's Included
+That is harmless on its own and expensive in company. This repository holds both halves.
 
-- Posts with category and tag archives
-- Static pages via slug routing
-- Seed data with demo content
-- D1 database and R2 storage pre-configured
-- Dark/light mode support
+| | what it shows | framework |
+| --- | --- | --- |
+| [`repro/bare-cloudflare-vite`](repro/bare-cloudflare-vite) | the **trigger**: 3 `hotUpdate` hooks per request, nothing edited | none |
+| the app at the root | the **cost**: 8 to 16 seconds a page, and 8× better with one line | Astro + EmDash |
 
-## Pages
+Two exhibits rather than one because the cost could not be synthesised. A 400-module
+graph with the same invalidation shape was measured at 30ms a request, with the
+invalidation confirmed firing 71 times. Whatever makes this expensive scales with the
+real graph, so the framework has to stay in order to show it.
 
-| Page | Route |
-|---|---|
-| Homepage | `/` |
-| All posts | `/posts` |
-| Single post | `/posts/:slug` |
-| Category archive | `/category/:slug` |
-| Tag archive | `/tag/:slug` |
-| Static pages | `/:slug` |
-| 404 | fallback |
+## The trigger
 
-## Infrastructure
+```bash
+cd repro/bare-cloudflare-vite
+pnpm install
+node count-hot-updates.mjs
+```
 
-- **Runtime:** Cloudflare Workers
-- **Database:** D1
-- **Storage:** R2
-- **Framework:** Astro with `@astrojs/cloudflare`
+```
+requests            6, all 200: true
+timings             32ms, 24ms, 22ms, 26ms, 25ms, 23ms
+hotUpdate hooks     18 during requests (3/request)
+files in .wrangler  9
+```
 
-## Local Development
+No bindings, no `observability` config, no framework. Nine files written under
+`.wrangler/state` per request by a project that configures no storage at all.
+
+Requests stay fast there because Vite matches no modules for those paths, so nothing
+rebuilds. The hooks still run, and a plugin that invalidates without checking which file
+changed will do so on every request forever.
+
+## The cost
 
 ```bash
 pnpm install
-pnpm dev
-```
-
-The site runs at http://localhost:4321 and the admin UI at
-http://localhost:4321/_emdash/admin. On first run EmDash creates the local
-database and loads `seed/seed.json`.
-
-Other scripts: `pnpm build`, `pnpm preview`, `pnpm typecheck`.
-
-## Is your setup affected?
-
-The dev server here is slow, and it is not slow everywhere. To find out whether
-your setup is affected, clone this repo, change the dependencies in
-`package.json` to match your project, and run the script:
-
-```bash
 pnpm dev-load
 ```
 
-It prints a verdict — `AFFECTED` or `NOT AFFECTED` — and the numbers behind it.
+Astro's middleware plugin is such a plugin. Its `hotUpdate` handler takes no arguments,
+so it cannot inspect the change:
 
-## What the script measures
-
-`repro-scripts/dev-load.mjs` starts the dev server from a clean cache, completes
-setup through the dev-bypass endpoint so the admin dashboard is reachable
-rather than redirecting to sign-in, then times the admin, home and posts
-routes.
-
-A response counts only if it came back 200, was larger than the byte floor,
-and did not land on the sign-in page. All three checks matter: a broken setup
-serves ~200-byte empty shells that render in a fraction of the time and read
-as a speedup, and this server also serves intermittent 404s. Responses that
-fail any check are reported separately and kept out of the medians, and a
-route that cannot produce enough good responses is marked broken rather than
-timed.
-
-It also records what the dev server did to get there: whether the first start
-crashed and had to be retried, which dependencies Vite discovered late, and
-the process's idle CPU and memory once the requests are done.
-
-## Variants
-
-One run can compare several setups, because reinstalling from pnpm is far
-cheaper than moving to another machine:
-
-| id | what it changes |
-| --- | --- |
-| `baseline` | nothing; `package.json` and the lockfile as committed |
-| `optimizedeps-include` | pre-bundles `astro/app/manifest` instead of letting Vite discover it after startup |
-| `emdash-latest` | `emdash` and `@emdash-cms/cloudflare` at latest |
-| `astro-latest` | `astro` and `@astrojs/cloudflare` at latest |
-
-```bash
-pnpm dev-load --variants=baseline,optimizedeps-include
-pnpm dev-load --variants=all
+```js
+// astro/dist/core/middleware/vite-plugin.js
+hotUpdate: {
+  handler() {
+    if (!isAstroServerEnvironment(this.environment)) return;
+    const middlewareVirtualMod = this.environment.moduleGraph
+      .getModuleById(MIDDLEWARE_RESOLVED_MODULE_ID);
+    if (!middlewareVirtualMod) return;
+    this.environment.moduleGraph.invalidateModule(middlewareVirtualMod);
+    this.environment.hot.send("astro:middleware-updated", {});
+  }
+}
 ```
 
-Variants live in a list at the top of the script; adding one is a few lines.
-`install` swaps npm packages, `vite` applies config through a generated file
-so the committed `astro.config.mjs` stays stock. Package variants restore
-`package.json` and the lockfile when they finish.
+Measured here, with `vite.server.watch.ignored` set against unset:
 
-Other flags: `--repeats` (good responses wanted per route, default 3),
-`--max-bad` (bad responses tolerated before giving up on a route, default 3),
-`--min-bytes` (the empty-page floor, default 1000), `--threshold` (the slow
-verdict line in ms, default 5000), `--out` (write results as JSON),
-`--comment` (with `--compare`, post the table on the pull request).
-
-Under GitHub Actions the run names itself from the runner and Node version and
-writes its JSON accordingly, so the workflow passes neither `--label` nor
-`--out`.
-
-## In CI
-
-The `Dev server load` workflow runs the same script on every pull request
-across Linux, macOS and Windows on Node 22 and Node 26. Operating system and
-Node version are the matrix, since those need separate runners; variants run
-inside each leg, where a pnpm install is all it costs. Each leg uploads its
-JSON, and `node repro-scripts/dev-load.mjs --compare=results` joins them into one
-table per variant in the job summary.
-
-The comparison closes with which legs reproduced anything. This repo exists to
-show the bug, so a leg that stays clean across every variant has nothing to
-report and can come out of the matrix. Variants are the opposite case: one that
-clears the symptoms is the finding, and worth keeping.
-
-## Deploying
-
-One-time setup in your Cloudflare account (names must match `wrangler.jsonc`):
-
-```bash
-npx wrangler d1 create astro-emdash-dev-repro
-npx wrangler r2 bucket create astro-emdash-dev-repro-media
+```
+baseline                    with **/.wrangler/** ignored
+  7.98s  6 modules            1.41s  2 modules
+  7.43s  6 modules            0.92s  2 modules
+  8.09s  6 modules            0.93s  2 modules
 ```
 
-Then:
+Uninstrumented the same change measured 16s → 0.14s; `DEBUG=vite:transform` inflates
+both arms, so the ratio is the finding rather than the absolute times.
 
-```bash
-pnpm deploy
-```
+## What this does not claim
 
-Sandboxed plugins use Dynamic Workers, which need a paid Cloudflare plan. To
-run without them, remove the `worker_loaders` block from `wrangler.jsonc`.
+The open question on [cloudflare/workers-sdk#13425](https://github.com/cloudflare/workers-sdk/issues/13425)
+is whether an HMR update re-bundles the whole app graph. A maintainer's answer there is
+that `import.meta.hot.accept()` creates a boundary so only the relevant parts update, and
+that is correct — six modules re-transform per request, not the graph.
 
-## See Also
+Nothing here depends on that being wrong. **Six modules cannot be seven seconds**;
+individual transforms in that log run 2 to 6ms. The expense is not re-transformation, it
+is what an SSR invalidation costs on the workerd side. The same site on `@astrojs/node`
+serves in 0.11s with the same invalidation happening, because rebuilding in-process is
+cheap.
 
-- [EmDash documentation](https://github.com/emdash-cms/emdash/tree/main/docs)
-- [EmDash templates](https://github.com/emdash-cms/templates)
+The finding sits one link earlier than the disputed one: updates are being generated at
+all, three per request, forever, with nobody editing anything.
+
+## Platforms
+
+Linux and Windows reproduce the slowness; macOS has not. That is still an inference from
+timings plus a guess about FSEvents surfacing sqlite WAL writes differently from inotify
+and ReadDirectoryChangesW. The `watcher` CI job measures the hook count per platform so
+it can be stated as fact or withdrawn.
+
+There is no macOS data at all for the edit-driven path that #13425 is about.
+
+## Also here
+
+- [#1](../../issues/1) — the running log of what has been established and corrected
+- [#13](../../issues/13) — the cold-start crash, still open: `astro/app/manifest` was
+  fixed in `@astrojs/cloudflare` 14.3.0 and emdash 0.36.0, and `astro/logger/console`
+  took its place. It costs most cold starts here a retry.
+- `repro-scripts/dev-load.mjs` — the harness behind `pnpm dev-load`. Counts only
+  responses that were 200, cleared a byte floor, and did not land on the sign-in page,
+  because a broken setup serves ~200-byte shells that look like a speedup.
+
+Versions: astro 7.3.1 · `@astrojs/cloudflare` 14.3.0 · emdash 0.36.0 ·
+`@cloudflare/vite-plugin` 1.54.2 · workerd 1.20260828.1

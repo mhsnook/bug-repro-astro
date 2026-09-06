@@ -1,5 +1,10 @@
 # @cloudflare/vite-plugin invalidates the dev server against itself
 
+One of two reproductions in this repository. This one shows the **trigger** and needs no
+framework. The app at the repository root shows what the trigger **costs** once a plugin
+invalidates on `hotUpdate`, which needs Astro to demonstrate — see the [root
+README](../../README.md).
+
 Minimal reproduction: `vite` plus `@cloudflare/vite-plugin`, one worker that returns
 `"hello"`, no bindings, no `observability` config, no framework.
 
@@ -92,6 +97,15 @@ Two comparisons place the cost:
   nothing (0.114s against a 0.114s baseline).
 - macOS reproduces the startup faults but not the slow renders, which fits FSEvents
   surfacing sqlite WAL writes differently from inotify and ReadDirectoryChangesW.
+
+## Why the cost is not shown here
+
+Requests here stay in the 20ms range, so this directory proves the trigger and not the
+consequence. Reproducing the consequence without a framework was attempted and failed: a
+400-module graph behind a virtual module, invalidated in exactly Astro's shape, measured
+30ms a request. The invalidation was confirmed firing — 71 times in the worker
+environment — so the negative is real rather than a broken test. Whatever makes this
+expensive scales with the size of the real graph.
 
 ## The fix
 
