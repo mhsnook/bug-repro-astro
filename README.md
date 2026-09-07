@@ -36,8 +36,10 @@ hotUpdate hooks     18 during requests (3/request)
 files in .wrangler  18
 ```
 
-No bindings, no `observability` config, no framework. Eighteen files written under
-`.wrangler/state` per request by a project that configures no storage at all.
+No bindings, no `observability` config, no framework. Eighteen files under
+`.wrangler/state` for a project that configures no storage at all. Most are created once
+at startup; the observability trace store among them is written to on every request, and
+that is what the watcher reports.
 
 Requests stay fast there because Vite matches no modules for those paths, so nothing
 rebuilds. The hooks still run, and a plugin that invalidates without checking which file
@@ -82,6 +84,38 @@ Measured here by `pnpm dev-load`, median of three healthy responses a route, wit
 Under `DEBUG=vite:transform` the same change measured 7.98s → 1.41s, and six modules
 re-transforming per request against two. The instrumentation inflates both arms, so the
 ratio is the finding rather than the absolute times.
+
+## When this started
+
+The missing watcher exclusion is old — `.wrangler` has never been excluded, and
+`git log -S '"**/.wrangler/**"'` over the plugin's source returns only the commit that
+added it to `server.fs.deny` and the one that fixes this. What is new is a writer busy
+enough to matter:
+
+| date | change | effect here |
+| --- | --- | --- |
+| 2026-04-14 | [#13427](https://github.com/cloudflare/workers-sdk/pull/13427), plugin 1.32.3 | `.wrangler` added to `server.fs.deny`, classified as must-not-be-served |
+| 2026-07-23 | [#14633](https://github.com/cloudflare/workers-sdk/pull/14633), miniflare | local observability captures request traces and console logs, opt-in |
+| 2026-07-31 | [#14944](https://github.com/cloudflare/workers-sdk/pull/14944), wrangler 4.118.0 | that capture becomes **on by default** in `wrangler dev` and the Vite plugin |
+| 2026-09-03 | [#15401](https://github.com/cloudflare/workers-sdk/pull/15401), miniflare `5.20260903.0-alpha` | D1, KV and R2 stores no longer need configured bindings, taking this project from nine files a run to eighteen |
+
+So the symptom dates to a default changing under a gap that was already there, not to
+anything about the watcher itself. Before July the directory was written rarely enough
+that not excluding it cost nothing visible.
+
+Measured, on the same versions and the same stock config, with only
+`X_LOCAL_OBSERVABILITY=false`:
+
+| route | default | observability off |
+| --- | --- | --- |
+| `/` | 9.31s | 0.67s |
+| `/posts` | 10.20s | 0.60s |
+| `/plain` | 9.85s | 0.58s |
+| `/bare-query` | 9.55s | 0.58s |
+
+`repro/minimal` goes from three `hotUpdate` hooks a request to none the same way. That is
+a diagnostic rather than a fix: the point is which writer drives the watcher, not that
+anyone should turn observability off.
 
 ## What this does not claim
 
@@ -143,7 +177,10 @@ restart the dev server, so ignoring them would break config reload.
 
 Applied to the installed 1.54.4 and run against this repository's stock
 `astro.config.mjs`, with no user-side Vite configuration at all, `/` goes from 9.31s to
-0.77s and `repro/minimal` from three `hotUpdate` hooks a request to none.
+0.77s and `repro/minimal` from three `hotUpdate` hooks a request to none. Three
+interventions land in the same place — this patch, `vite.server.watch.ignored` set by
+hand, and disabling the writer with `X_LOCAL_OBSERVABILITY=false` — which is what ties
+the chain together.
 
 The change, with a test covering both the exclusion and the merge with a user's own
 `server.watch.ignored`, is at
