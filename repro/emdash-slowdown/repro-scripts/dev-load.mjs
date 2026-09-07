@@ -186,6 +186,15 @@ const VARIANTS = [
 		description: "astro and @astrojs/cloudflare at latest",
 		install: { astro: "latest", "@astrojs/cloudflare": "latest" },
 	},
+	{
+		// 7.2.0 is the last release whose middleware plugin checked the changed
+		// path before invalidating; 7.2.1 replaced that with a hotUpdate handler
+		// taking no arguments. The adapter pinned here declares peer astro ^7.2.0,
+		// so this downgrades astro alone and nothing else moves.
+		id: "astro-7.2.0",
+		description: "astro pinned to 7.2.0, the last release that checked which file changed",
+		install: { astro: "7.2.0" },
+	},
 ];
 
 const LOG_SIGNATURES = [
