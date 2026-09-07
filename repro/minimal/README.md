@@ -63,6 +63,21 @@ vite:hmr (client)  [no modules matched] …
 Nine files under `.wrangler/state` are touched per request — the observability trace
 store and the cache metadata store, neither of which this project configures.
 
+## Platforms
+
+The same script on GitHub's three runners, six requests each, nothing edited:
+
+| platform | `hotUpdate` hooks per request | files written under `.wrangler/state` |
+| --- | --- | --- |
+| ubuntu-latest | 4 | 9 |
+| windows-latest | 3 | 9 |
+| macos-latest | **0** | 9 |
+
+Every platform writes the same nine files. macOS is the one whose watcher does not
+report them, and it is also the one where the Astro site next door stays fast. Why the
+writes go unreported there has not been established — chokidar's polling settings and
+FSEvents coalescing are both unchecked.
+
 ## Why it is usually invisible, and when it is not
 
 Vite matches no modules for these paths, so on its own nothing rebuilds and requests
@@ -95,8 +110,8 @@ Two comparisons place the cost:
 - The same site on `@astrojs/node` serves in **0.11s**. It invalidates too; rebuilding
   in-process is just cheap. Forcing a watcher event there with `touch data.db` changed
   nothing (0.114s against a 0.114s baseline).
-- macOS reproduces the startup faults but not the slow renders, which fits FSEvents
-  surfacing sqlite WAL writes differently from inotify and ReadDirectoryChangesW.
+- macOS never fires the hook at all, so there is nothing to invalidate and the same
+  site loads in 0.05s there. See Platforms above.
 
 ## Why the cost is not shown here
 
