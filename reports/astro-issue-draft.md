@@ -56,6 +56,13 @@ hotUpdate: {
 }
 ```
 
+On each call this discards the virtual module's cached transform result and its
+`ssrModule`, then walks up to every importer that has not accepted it and invalidates
+those too. `isHmr` defaults to `false`, so it is a plain invalidation rather than an HMR
+update. In this project that reaches six modules per request, against two when the path
+check is present. Six re-transforms at a few milliseconds each are not the cost; the cost
+is what an SSR invalidation makes workerd redo on the next request.
+
 `isMiddlewarePath` is still defined and exported in 7.2.1 and 7.3.1 with no callers.
 Counting occurrences of `isMiddlewarePath(` in the shipped file gives two in 7.2.0 and
 one, the definition, in both later versions.
