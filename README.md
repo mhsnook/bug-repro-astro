@@ -10,7 +10,7 @@ That is harmless on its own and expensive in company. This repository holds both
 | | what it shows | framework |
 | --- | --- | --- |
 | [`repro/minimal`](repro/minimal) | the **trigger**: 3 `hotUpdate` hooks per request, nothing edited | none |
-| [`repro/emdash-slowdown`](repro/emdash-slowdown) | the **cost**: 8 to 16 seconds a page, and 8× better with one line | Astro + EmDash |
+| [`repro/emdash-slowdown`](repro/emdash-slowdown) | the **cost**: 9 to 10 seconds a page, and 12× better with one line | Astro + EmDash |
 
 Each is a standalone project with its own `package.json` and lockfile. They are
 deliberately not a pnpm workspace: `repro/minimal` is only worth anything if its
@@ -31,12 +31,12 @@ node count-hot-updates.mjs
 
 ```
 requests            6, all 200: true
-timings             32ms, 24ms, 22ms, 26ms, 25ms, 23ms
+timings             36ms, 32ms, 30ms, 36ms, 29ms, 33ms
 hotUpdate hooks     18 during requests (3/request)
-files in .wrangler  9
+files in .wrangler  18
 ```
 
-No bindings, no `observability` config, no framework. Nine files written under
+No bindings, no `observability` config, no framework. Eighteen files written under
 `.wrangler/state` per request by a project that configures no storage at all.
 
 Requests stay fast there because Vite matches no modules for those paths, so nothing
@@ -68,17 +68,20 @@ hotUpdate: {
 }
 ```
 
-Measured here, with `vite.server.watch.ignored` set against unset:
+Measured here by `pnpm dev-load`, median of three healthy responses a route, with
+`vite.server.watch.ignored` set against unset:
 
-```
-baseline                    with **/.wrangler/** ignored
-  7.98s  6 modules            1.41s  2 modules
-  7.43s  6 modules            0.92s  2 modules
-  8.09s  6 modules            0.93s  2 modules
-```
+| route | baseline | with `**/.wrangler/**` ignored |
+| --- | --- | --- |
+| `/` | 9.31s | 0.80s |
+| `/posts` | 10.20s | 0.75s |
+| `/plain` | 9.85s | 0.76s |
+| `/bare-query` | 9.55s | 0.65s |
+| `/_emdash/admin` | 1.03s | 0.22s |
 
-Uninstrumented the same change measured 16s → 0.14s; `DEBUG=vite:transform` inflates
-both arms, so the ratio is the finding rather than the absolute times.
+Under `DEBUG=vite:transform` the same change measured 7.98s → 1.41s, and six modules
+re-transforming per request against two. The instrumentation inflates both arms, so the
+ratio is the finding rather than the absolute times.
 
 ## What this does not claim
 
@@ -107,12 +110,40 @@ edited:
 | windows-latest | 3 | 9 |
 | macos-latest | **0** | 9 |
 
-macOS writes the same nine files per request and its watcher reports none of them, which
-is why the same site loads in 0.05s there and 8 to 16s on the other two. Why the writes
-go unreported on macOS is still open — chokidar's polling and FSEvents defaults are the
-obvious places to look, and neither has been checked.
+That table was measured on `@cloudflare/vite-plugin` 1.54.2, which wrote nine files a
+request where 1.54.4 writes eighteen; the hook counts are unchanged on the platform
+re-measured since. macOS writes the same files per request and its watcher reports none
+of them, which is why the same site loads in 0.05s there and 9 to 10s on the other two.
+Why the writes go unreported on macOS is still open — chokidar's polling and FSEvents
+defaults are the obvious places to look, and neither has been checked.
 
 There is no data yet for the edit-driven path that #13425 is about, on any platform.
+
+## The fix
+
+Updating does not help: every measurement above is on the versions listed at the end of
+this file, all current. 1.54.4 writes twice as many files a request as 1.54.2 and reports
+the same three hooks.
+
+The plugin already knows `.wrangler` is its own, and already names it — in
+`server.fs.deny`, which governs only what may be served, not what the watcher reports:
+
+```ts
+// packages/vite-plugin-cloudflare/src/plugins/config.ts
+server: {
+  allowedHosts: getAllowedHosts(...),
+  watch: { ignored: ["**/.wrangler/**"] },   // this line
+  fs: { deny: [...defaultDeniedFiles, ...configPaths] },
+},
+```
+
+Excluding only `.wrangler` is deliberate rather than reusing the deny list: `.dev.vars`
+and the Wrangler config files are denied too, but the plugin watches those on purpose to
+restart the dev server, so ignoring them would break config reload.
+
+Applied to the installed 1.54.4 and run against this repository's stock
+`astro.config.mjs`, with no user-side Vite configuration at all, `/` goes from 9.31s to
+0.77s and `repro/minimal` from three `hotUpdate` hooks a request to none.
 
 ## Also here
 
@@ -125,5 +156,10 @@ There is no data yet for the edit-driven path that #13425 is about, on any platf
   responses that were 200, cleared a byte floor, and did not land on the sign-in page,
   because a broken setup serves ~200-byte shells that look like a speedup.
 
-Versions: astro 7.3.1 · `@astrojs/cloudflare` 14.3.0 · emdash 0.36.0 ·
-`@cloudflare/vite-plugin` 1.54.2 · workerd 1.20260828.1
+Versions: astro 7.3.1 · `@astrojs/cloudflare` 14.3.0 · emdash 0.36.0 · vite 8.2.2 ·
+`@cloudflare/vite-plugin` 1.54.4 · wrangler 4.129.0 · miniflare 5.20260903.0-alpha ·
+workerd 1.20260903.1
+
+Every one of those is the latest published release as of 2026-09-07, except
+`@cloudflare/workers-types`, held at 5.20260906.1 by this repository's 24-hour
+`minimumReleaseAge` policy.
