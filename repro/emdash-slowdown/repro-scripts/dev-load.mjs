@@ -596,6 +596,12 @@ async function postComment(markdown) {
 // --- compare mode: join the JSON one CI leg per platform leaves behind -------
 if (args.compare) {
 	const dir = resolve(args.compare);
+	// Every measure leg can fail before uploading anything, in which case the
+	// download step leaves no directory at all.
+	if (!existsSync(dir)) {
+		console.log(`No results at ${dir}: every measuring job failed before uploading.`);
+		process.exit(0);
+	}
 	const runs = [];
 	for (const file of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
 		try {
