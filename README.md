@@ -161,15 +161,18 @@ edited:
 
 | platform | `hotUpdate` hooks per request | files under `.wrangler` |
 | --- | --- | --- |
-| ubuntu-latest | 3 to 9.5 | 18 |
+| ubuntu-latest | 3 and up | 18 |
 | windows-latest | 3 | 18 |
 | macos-latest | **0** | 18 |
 
-Measured on `@cloudflare/vite-plugin` 1.54.4 over four CI runs. Windows and macOS
-returned the same figure every time. Ubuntu did not: 18, 18, 21 and 57 hooks across six
-requests, so 3 per request three times and 9.5 once. Take the ubuntu number as a floor
-rather than a rate — how many events the watcher raises for one burst of writes is not
-fixed, and the same six requests cost three times as much in one run as in the next.
+Measured on `@cloudflare/vite-plugin` 1.54.4. Windows returned 3 and macOS 0 in every CI
+run. Ubuntu returned 3, 3, 3.5, 9.5 and 11 across five, for the same six requests against
+the same lockfile, so no single ubuntu figure is worth quoting: 3 is a floor that has
+held, and each of the last two runs to exceed it set a new high. Do not read the ceiling
+as established.
+
+None of that changes what the table is for. Whether a platform reports the writes at all
+is stable, and that is the 0.
 
 Against the same table on 1.54.2 the counts are in the same range — 4, 3 and 0 — while
 the file count doubled on every platform, so what 1.54.4 added is more state, not more
