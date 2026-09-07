@@ -12,8 +12,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const projectRoot = dirname(fileURLToPath(import.meta.url));
-const viteBin = join(dirname(require.resolve("vite/package.json")), "bin", "vite.js");
 
 const args = Object.fromEntries(
 	process.argv
@@ -23,6 +21,17 @@ const args = Object.fromEntries(
 			return [k, v];
 		})
 		.filter(([, v]) => v !== ""),
+);
+
+// Which reproduction to probe. The measurement is the same for all of them:
+// what gets written under the persist directory, and what the watcher makes of
+// it. Only the app in front of it differs.
+const projectRoot = resolve(args.dir ?? dirname(fileURLToPath(import.meta.url)));
+// Resolved against the reproduction, not this file: each one installs its own.
+const viteBin = join(
+	dirname(createRequire(join(projectRoot, "package.json")).resolve("vite/package.json")),
+	"bin",
+	"vite.js",
 );
 
 const PORT = Number(args.port ?? 4700);

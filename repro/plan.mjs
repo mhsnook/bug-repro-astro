@@ -56,10 +56,28 @@ const legs = [
 			os,
 			node: "22",
 			dir: "repro/minimal",
-			script: "count-hot-updates.mjs",
-			args: [`--watcher=${watcher}`],
+			// One probe for every reproduction, run from the repository root so it
+			// is not copied per exhibit and cannot drift between them.
+			runFrom: ".",
+			script: "repro/watcher-probe.mjs",
+			args: ["--dir=repro/minimal", `--watcher=${watcher}`],
 		})),
 	),
+	// The same probe against Cloudflare's own scaffold, which writes and fires
+	// hooks exactly like the others and stays fast: TanStack Start's hotUpdate
+	// hooks take the context and find nothing matched. The control that shows the
+	// writes are not expensive on their own.
+	{
+		id: "watcher-tanstack",
+		label: "tanstack/linux",
+		name: "watcher on ubuntu-latest (stock TanStack Start)",
+		os: "ubuntu-latest",
+		node: "22",
+		dir: "repro/tanstack-start",
+		runFrom: ".",
+		script: "repro/watcher-probe.mjs",
+		args: ["--dir=repro/tanstack-start"],
+	},
 ];
 
 // A bad matrix fails the workflow with a parse error somewhere unhelpful, so it
@@ -91,7 +109,11 @@ if (args.matrix) {
 }
 
 if (args.list) {
-	for (const leg of legs) console.log(`${leg.id.padEnd(18)} ${leg.os} node ${leg.node}  ${leg.dir}/${leg.script}`);
+	for (const leg of legs) {
+		const from = leg.runFrom ?? leg.dir;
+		const where = from === "." ? leg.script : `${from}/${leg.script}`;
+		console.log(`${leg.id.padEnd(20)} ${leg.os.padEnd(15)} node ${leg.node}  ${where}  [installs ${leg.dir}]`);
+	}
 	process.exit(0);
 }
 
@@ -110,11 +132,14 @@ if (args.run) {
 		console.error(`Unknown leg "${args.run}". Known: ${legs.map((l) => l.id).join(", ")}`);
 		process.exit(2);
 	}
-	const cwd = join(repoRoot, leg.dir);
-	mkdirSync(join(cwd, RESULTS), { recursive: true });
+	const cwd = join(repoRoot, leg.runFrom ?? leg.dir);
+	// Results live with the reproduction whatever directory the script ran from,
+	// so one upload rule still covers every leg.
+	const out = join(leg.dir, RESULTS, `${leg.id}.json`);
+	mkdirSync(join(repoRoot, leg.dir, RESULTS), { recursive: true });
 	const argv = [
 		leg.script,
-		`--out=${RESULTS}/${leg.id}.json`,
+		`--out=${join(repoRoot, out)}`,
 		`--label=${leg.label ?? leg.id}`,
 		...(leg.args ?? []),
 	];
