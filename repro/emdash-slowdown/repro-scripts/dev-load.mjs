@@ -724,9 +724,13 @@ if (args.compare) {
 
 	// One split for the whole report, pooled across every leg, so the platforms
 	// are read against each other rather than each against its own spread.
+	// Healthy variants only. A leg whose setup broke still gets classified against
+	// this split, but must not help place the cutoffs that judge the others.
 	const split = splitByMode(
 		runs.flatMap((r) =>
-			r.variants.flatMap((v) => v.routes.filter((x) => x.medianMs !== null).map((x) => x.medianMs)),
+			r.variants
+				.filter((v) => v.healthy)
+				.flatMap((v) => v.routes.filter((x) => x.medianMs !== null).map((x) => x.medianMs)),
 		),
 	);
 
