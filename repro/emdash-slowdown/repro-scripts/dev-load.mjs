@@ -603,19 +603,23 @@ if (args.compare) {
 		process.exit(0);
 	}
 	const runs = [];
+	const watchers = [];
 	for (const file of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
 		try {
 			const parsed = JSON.parse(readFileSync(join(dir, file), "utf8"));
 			if (Array.isArray(parsed.variants) && parsed.label) runs.push(parsed);
-			else console.log(`Skipping ${file}: not a dev-load result.`);
+			else if (parsed.label && typeof parsed.hotUpdatesPerRequest === "number") {
+				watchers.push(parsed);
+			} else console.log(`Skipping ${file}: not a dev-load or watcher result.`);
 		} catch (err) {
 			// One unreadable artifact should not take the whole report down with it.
 			console.log(`Skipping ${file}: ${err.message}`);
 		}
 	}
 	runs.sort((a, b) => a.label.localeCompare(b.label));
+	watchers.sort((a, b) => a.label.localeCompare(b.label));
 
-	if (runs.length === 0) {
+	if (runs.length === 0 && watchers.length === 0) {
 		console.log("No results to compare.");
 		process.exit(0);
 	}
@@ -656,9 +660,13 @@ if (args.compare) {
 	const md = [
 		"## Dev server load times",
 		"",
-		`Median of ${runs[0].settings.repeats} healthy 200s per route. A response that was not 200,`,
-		`came back under ${runs[0].settings.minBytes} bytes, or landed on the sign-in page is excluded`,
-		"and counted as ✗. Rows marked broken served empty pages, so their timings mean nothing.",
+		...(runs.length === 0
+			? ["Every measuring leg failed before uploading a result, so there are no timings."]
+			: [
+					`Median of ${runs[0].settings.repeats} healthy 200s per route. A response that was not 200,`,
+					`came back under ${runs[0].settings.minBytes} bytes, or landed on the sign-in page is excluded`,
+					"and counted as ✗. Rows marked broken served empty pages, so their timings mean nothing.",
+				]),
 		"",
 		...ids.flatMap((id) => [
 			`### \`${id}\``,
@@ -682,36 +690,68 @@ if (args.compare) {
 			}),
 			"",
 		]),
-		"### Which legs reproduce anything",
-		"",
-		"This repo exists to show the bug. A leg that stays clean across every",
-		"variant is not evidence of health, it is a leg with nothing to report,",
-		"and it can come out of the matrix.",
-		"",
-		"Renders are read as a verdict, not a score. Sub-second is what a hosted",
-		"worker should do and counts as working. Nothing lands between that and",
-		"the several seconds the failing platforms take, so the gap does the",
-		"classifying and run-to-run noise never decides it.",
-		"",
-		"| platform | renders | symptoms |",
-		"| --- | --- | --- |",
-		...runs.map(
-			(r) => `| ${r.label} | ${rendersOf(r)} | ${symptomsOf(r).join(", ") || "**none**"} |`,
-		),
-		"",
-		(() => {
-			const clean = runs.filter((r) => symptomsOf(r).length === 0).map((r) => r.label);
-			return clean.length
-				? `Reproduced nothing, so candidates to strike: ${clean.join(", ")}.`
-				: "Every leg reproduced at least one symptom.";
-		})(),
-		"",
-		"| platform | node | astro | emdash | workerd |",
-		"| --- | --- | --- | --- | --- |",
-		...runs.map((r) => {
-			const v = r.variants[0]?.versions ?? {};
-			return `| ${r.label} | ${r.node} | ${v.astro ?? "?"} | ${v.emdash ?? "?"} | ${v.workerd ?? "?"} |`;
-		}),
+		...(runs.length === 0
+			? []
+			: [
+					"### Which legs reproduce anything",
+					"",
+					"This repo exists to show the bug. A leg that stays clean across every",
+					"variant is not evidence of health, it is a leg with nothing to report,",
+					"and it can come out of the matrix.",
+					"",
+					"Renders are read as a verdict, not a score. Sub-second is what a hosted",
+					"worker should do and counts as working. Nothing lands between that and",
+					"the several seconds the failing platforms take, so the gap does the",
+					"classifying and run-to-run noise never decides it.",
+					"",
+					"| platform | renders | symptoms |",
+					"| --- | --- | --- |",
+					...runs.map(
+						(r) => `| ${r.label} | ${rendersOf(r)} | ${symptomsOf(r).join(", ") || "**none**"} |`,
+					),
+					"",
+					(() => {
+						const clean = runs.filter((r) => symptomsOf(r).length === 0).map((r) => r.label);
+						return clean.length
+							? `Reproduced nothing, so candidates to strike: ${clean.join(", ")}.`
+							: "Every leg reproduced at least one symptom.";
+					})(),
+					"",
+				]),
+		...(watchers.length === 0
+			? []
+			: [
+					"### Why those legs and not the others",
+					"",
+					"`repro/minimal` on the same runners: vite plus `@cloudflare/vite-plugin`,",
+					"no framework, no bindings, nothing edited. It counts how many `hotUpdate`",
+					"hooks a request causes, which is a property of the platform's file watcher.",
+					"",
+					"| platform | hooks per request | files written under `.wrangler/state` | requests |",
+					"| --- | --- | --- | --- |",
+					...watchers.map(
+						(w) =>
+							`| ${w.label} | ${w.hotUpdatesPerRequest === 0 ? "**0**" : w.hotUpdatesPerRequest} | ${w.wranglerFiles} | ${w.requests}${w.allRequestsOk ? "" : ", **not all 200**"} |`,
+					),
+					"",
+					watchers.some((w) => w.hotUpdatesPerRequest === 0)
+						? `Every platform writes the same files. ${watchers
+								.filter((w) => w.hotUpdatesPerRequest === 0)
+								.map((w) => w.label)
+								.join(", ")} never sees them, so nothing is invalidated and nothing costs anything there.`
+						: "Every platform's watcher reports the writes.",
+					"",
+				]),
+		...(runs.length === 0
+			? []
+			: [
+					"| platform | node | astro | emdash | workerd |",
+					"| --- | --- | --- | --- | --- |",
+					...runs.map((r) => {
+						const v = r.variants[0]?.versions ?? {};
+						return `| ${r.label} | ${r.node} | ${v.astro ?? "?"} | ${v.emdash ?? "?"} | ${v.workerd ?? "?"} |`;
+					}),
+				]),
 	].join("\n");
 
 	console.log(md);
