@@ -154,18 +154,20 @@ all, three per request, forever, with nobody editing anything.
 The `watcher` CI job runs `repro/minimal` on all three runners. Six requests, nothing
 edited:
 
-| platform | `hotUpdate` hooks per request | files written under `.wrangler/state` |
+| platform | `hotUpdate` hooks per request | files under `.wrangler` |
 | --- | --- | --- |
-| ubuntu-latest | 4 | 9 |
-| windows-latest | 3 | 9 |
-| macos-latest | **0** | 9 |
+| ubuntu-latest | 3.5 | 18 |
+| windows-latest | 3 | 18 |
+| macos-latest | **0** | 18 |
 
-That table was measured on `@cloudflare/vite-plugin` 1.54.2, which wrote nine files a
-request where 1.54.4 writes eighteen; the hook counts are unchanged on the platform
-re-measured since. macOS writes the same files per request and its watcher reports none
-of them, which is why the same site loads in 0.05s there and 9 to 10s on the other two.
-Why the writes go unreported on macOS is still open — chokidar's polling and FSEvents
-defaults are the obvious places to look, and neither has been checked.
+Measured on `@cloudflare/vite-plugin` 1.54.4. Against the same table on 1.54.2 the hook
+counts are unchanged — 4, 3 and 0 — while the file count doubled on every platform, so
+what 1.54.4 added is more state, not more reporting.
+
+macOS writes the same eighteen files and its watcher reports none of them, which is why
+the same site loads in 0.05s there and 9 to 10s on the other two. Why the writes go
+unreported on macOS is still open — chokidar's polling and FSEvents defaults are the
+obvious places to look, and neither has been checked.
 
 There is no data yet for the edit-driven path that #13425 is about, on any platform.
 
