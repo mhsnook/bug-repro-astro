@@ -146,13 +146,19 @@ that `import.meta.hot.accept()` creates a boundary so only the relevant parts up
 that is correct — six modules re-transform per request, not the graph.
 
 Nothing here depends on that being wrong. **Six modules cannot be seven seconds**;
-individual transforms in that log run 2 to 6ms. The expense is not re-transformation, it
-is what an SSR invalidation costs on the workerd side. The same site on `@astrojs/node`
-serves in 0.11s with the same invalidation happening, because rebuilding in-process is
-cheap.
+individual transforms in that log run 2 to 6ms, so the expense is not re-transformation.
+What an SSR invalidation costs instead, and why, is not established here. It is measured
+only as a total: remove the invalidations and the seconds go with them.
+
+`@astrojs/node` is not the comparison it looks like, and an earlier version of this file
+used it as one. Without `@cloudflare/vite-plugin` there is no `.wrangler` inside the Vite
+root, nothing writes there while serving a request, and the invalidation never fires, so
+a fast number on that adapter separates nothing: frequency and cost differ together. The
+synthetic graph above points the same way, with 71 invalidations costing 30ms, which is
+hard to reconcile with the round trip into the isolate being expensive by itself.
 
 The finding sits one link earlier than the disputed one: updates are being generated at
-all, three per request, forever, with nobody editing anything.
+all, on every request, forever, with nobody editing anything.
 
 ## Platforms
 
