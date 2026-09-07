@@ -98,12 +98,21 @@ all, three per request, forever, with nobody editing anything.
 
 ## Platforms
 
-Linux and Windows reproduce the slowness; macOS has not. That is still an inference from
-timings plus a guess about FSEvents surfacing sqlite WAL writes differently from inotify
-and ReadDirectoryChangesW. The `watcher` CI job measures the hook count per platform so
-it can be stated as fact or withdrawn.
+The `watcher` CI job runs `repro/minimal` on all three runners. Six requests, nothing
+edited:
 
-There is no macOS data at all for the edit-driven path that #13425 is about.
+| platform | `hotUpdate` hooks per request | files written under `.wrangler/state` |
+| --- | --- | --- |
+| ubuntu-latest | 4 | 9 |
+| windows-latest | 3 | 9 |
+| macos-latest | **0** | 9 |
+
+macOS writes the same nine files per request and its watcher reports none of them, which
+is why the same site loads in 0.05s there and 8 to 16s on the other two. Why the writes
+go unreported on macOS is still open — chokidar's polling and FSEvents defaults are the
+obvious places to look, and neither has been checked.
+
+There is no data yet for the edit-driven path that #13425 is about, on any platform.
 
 ## Also here
 

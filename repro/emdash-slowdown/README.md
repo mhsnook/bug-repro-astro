@@ -33,6 +33,14 @@ invalidation happening.
 `DEBUG=vite:transform` inflates both arms. Uninstrumented the same change measured
 16s → 0.14s, so the ratio is the finding rather than the absolute times.
 
+## Platforms
+
+CI runs this on all three runners. Linux and Windows serve the admin page in 8 to 16s;
+macOS serves it in 0.05s, unfixed. That is not a macOS-only quirk of this app — the
+watcher in [`repro/minimal`](../minimal) fires zero `hotUpdate` hooks per request on
+macOS and three or four on the other two, from the same nine file writes. Nothing gets
+invalidated there, so nothing costs anything.
+
 ## The harness
 
 `repro-scripts/dev-load.mjs` starts the dev server, completes setup through the
