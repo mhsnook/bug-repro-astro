@@ -1,9 +1,9 @@
 # @cloudflare/vite-plugin invalidates the dev server against itself
 
 One of two reproductions in this repository. This one shows the **trigger** and needs no
-framework. The app at the repository root shows what the trigger **costs** once a plugin
-invalidates on `hotUpdate`, which needs Astro to demonstrate — see the [root
-README](../../README.md).
+framework. [`repro/emdash-slowdown`](../emdash-slowdown) shows what the trigger **costs**
+once a plugin invalidates on `hotUpdate`, which needs Astro to demonstrate. The [root
+README](../../README.md) explains the split.
 
 Minimal reproduction: `vite` plus `@cloudflare/vite-plugin`, one worker that returns
 `"hello"`, no bindings, no `observability` config, no framework.
