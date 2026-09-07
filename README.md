@@ -87,23 +87,37 @@ ratio is the finding rather than the absolute times.
 
 ## When this started
 
-The missing watcher exclusion is old — `.wrangler` has never been excluded, and
-`git log -S '"**/.wrangler/**"'` over the plugin's source returns only the commit that
-added it to `server.fs.deny` and the one that fixes this. What is new is a writer busy
-enough to matter:
+Version 0.0.1, on 2025-01-22. The initial beta release already resolved
+`.wrangler/state` against the Vite root by default, in a `getPersistence(root,
+persistState)` that is the same shape as today's, and documented it in its README. No
+release since has excluded that directory from the watcher: `git log -S
+'"**/.wrangler/**"'` over the plugin's source returns two commits, the one adding it to
+`server.fs.deny` and the one fixing this.
+
+So any project whose Worker writes storage while serving a request has been affected for
+nineteen months. Measured on `repro/minimal` with local observability off, so that the
+only writer is the Worker itself:
+
+| what the Worker does per request | `hotUpdate` hooks per request |
+| --- | --- |
+| nothing | 0 |
+| binds KV, writes nothing | 0 |
+| one `env.KV.put()` | **9** |
+
+The binding alone changes nothing, which is what identifies the write rather than the
+configuration as the cause. Nine hooks is three times what an idle project pays.
+
+What changed recently is that this reached projects that write nothing at all:
 
 | date | change | effect here |
 | --- | --- | --- |
+| 2025-01-22 | plugin 0.0.1 | persistence defaults to `.wrangler/state` inside the Vite root, and the watcher is never told |
 | 2026-04-14 | [#13427](https://github.com/cloudflare/workers-sdk/pull/13427), plugin 1.32.3 | `.wrangler` added to `server.fs.deny`, classified as must-not-be-served |
 | 2026-07-23 | [#14633](https://github.com/cloudflare/workers-sdk/pull/14633), miniflare | local observability captures request traces and console logs, opt-in |
-| 2026-07-31 | [#14944](https://github.com/cloudflare/workers-sdk/pull/14944), wrangler 4.118.0 | that capture becomes **on by default** in `wrangler dev` and the Vite plugin |
+| 2026-07-31 | [#14944](https://github.com/cloudflare/workers-sdk/pull/14944), wrangler 4.118.0 | that capture becomes **on by default**, so every request writes there whatever the Worker does |
 | 2026-09-03 | [#15401](https://github.com/cloudflare/workers-sdk/pull/15401), miniflare `5.20260903.0-alpha` | D1, KV and R2 stores no longer need configured bindings, taking this project from nine files a run to eighteen |
 
-So the symptom dates to a default changing under a gap that was already there, not to
-anything about the watcher itself. Before July the directory was written rarely enough
-that not excluding it cost nothing visible.
-
-Measured, on the same versions and the same stock config, with only
+Turning that writer back off, on the same versions and the same stock config, with only
 `X_LOCAL_OBSERVABILITY=false`:
 
 | route | default | observability off |
@@ -113,9 +127,11 @@ Measured, on the same versions and the same stock config, with only
 | `/plain` | 9.85s | 0.58s |
 | `/bare-query` | 9.55s | 0.58s |
 
-`repro/minimal` goes from three `hotUpdate` hooks a request to none the same way. That is
-a diagnostic rather than a fix: the point is which writer drives the watcher, not that
-anyone should turn observability off.
+That is a diagnostic rather than a fix: it identifies which writer drives the watcher, and
+nobody should have to turn observability off. A project escapes this today by moving
+persistence out of the Vite root, by setting `vite.server.watch.ignored` itself, or by
+being on macOS, whose watcher reports none of these writes. The third is why nineteen
+months produced no report.
 
 ## What this does not claim
 
@@ -156,8 +172,8 @@ There is no data yet for the edit-driven path that #13425 is about, on any platf
 ## The fix
 
 Updating does not help: every measurement above is on the versions listed at the end of
-this file, all current. 1.54.4 writes twice as many files a request as 1.54.2 and reports
-the same three hooks.
+this file, all current. 1.54.4 leaves twice as many files under `.wrangler` as 1.54.2 and
+reports the same three hooks.
 
 The plugin already knows `.wrangler` is its own, and already names it — in
 `server.fs.deny`, which governs only what may be served, not what the watcher reports:
