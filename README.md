@@ -161,14 +161,19 @@ edited:
 
 | platform | `hotUpdate` hooks per request | files under `.wrangler` |
 | --- | --- | --- |
-| ubuntu-latest | 3 to 3.5 | 18 |
+| ubuntu-latest | 3 to 9.5 | 18 |
 | windows-latest | 3 | 18 |
 | macos-latest | **0** | 18 |
 
-Measured on `@cloudflare/vite-plugin` 1.54.4, over two runs; ubuntu reported 21 hooks
-across six requests in one and 18 in the other, which is the only figure that moved.
-Against the same table on 1.54.2 the counts are unchanged — 4, 3 and 0 — while the file
-count doubled on every platform, so what 1.54.4 added is more state, not more reporting.
+Measured on `@cloudflare/vite-plugin` 1.54.4 over four CI runs. Windows and macOS
+returned the same figure every time. Ubuntu did not: 18, 18, 21 and 57 hooks across six
+requests, so 3 per request three times and 9.5 once. Take the ubuntu number as a floor
+rather than a rate — how many events the watcher raises for one burst of writes is not
+fixed, and the same six requests cost three times as much in one run as in the next.
+
+Against the same table on 1.54.2 the counts are in the same range — 4, 3 and 0 — while
+the file count doubled on every platform, so what 1.54.4 added is more state, not more
+reporting.
 
 macOS is the useful case, because nobody configured it. It writes the same eighteen
 files, its watcher reports none of them, and `repro/emdash-slowdown` on the same commit
