@@ -187,13 +187,26 @@ const VARIANTS = [
 		install: { astro: "latest", "@astrojs/cloudflare": "latest" },
 	},
 	{
-		// 7.2.0 is the last release whose middleware plugin checked the changed
-		// path before invalidating; 7.2.1 replaced that with a hotUpdate handler
-		// taking no arguments. The adapter pinned here declares peer astro ^7.2.0,
-		// so this downgrades astro alone and nothing else moves.
-		id: "astro-7.2.0",
-		description: "astro pinned to 7.2.0, the last release that checked which file changed",
-		install: { astro: "7.2.0" },
+		// 7.2.0 returned early unless the changed file was under srcDir and was the
+		// middleware; 7.2.1 replaced that with a handler taking no arguments. This
+		// puts both checks back into the installed 7.3.1, using the isMiddlewarePath
+		// that is still exported there with no callers, so the only thing that
+		// changes between this and baseline is the guard.
+		id: "astro-guarded-hotupdate",
+		description: "restore into astro 7.3.1 the path check it dropped in 7.2.1",
+		patch: {
+			pkg: "astro",
+			file: "dist/core/middleware/vite-plugin.js",
+			find: `      handler() {\n        if (!isAstroServerEnvironment(this.environment)) return;`,
+			replace:
+				`      handler(ctx) {\n` +
+				`        if (!isAstroServerEnvironment(this.environment)) return;\n` +
+				`        if (ctx?.file) {\n` +
+				`          const __src = fileURLToPath(settings.config.srcDir).replace(/\\\\/g, "/");\n` +
+				`          const __f = String(ctx.file).replace(/\\\\/g, "/");\n` +
+				`          if (!__f.startsWith(__src) || !isMiddlewarePath(__f.slice(__src.length))) return;\n` +
+				`        }`,
+		},
 	},
 ];
 
@@ -476,6 +489,37 @@ async function applyInstall(variant) {
 	return true;
 }
 
+// Edits a file inside node_modules for the duration of one variant. Downgrading
+// astro to test the guard drags in the rest of the release; @astrojs/cloudflare
+// 14.3.0 imports renderForPrerender, which astro 7.2.0 does not export, so that
+// arm cannot even boot. Patching the installed copy moves one thing.
+function applyPatch(variant) {
+	if (!variant.patch) return false;
+	// Resolved through package.json and joined, because astro's exports map does
+	// not expose its dist paths and require.resolve on one throws.
+	const req = createRequire(join(projectRoot, "package.json"));
+	const file = join(dirname(req.resolve(`${variant.patch.pkg}/package.json`)), variant.patch.file);
+	const before = readFileSync(file, "utf8");
+	if (!before.includes(variant.patch.find)) {
+		// A patch that silently matched nothing would report the unpatched code as
+		// though it were the fix.
+		console.error(`  PATCH DID NOT APPLY: ${variant.patch.pkg}/${variant.patch.file} does not contain the expected source`);
+		return null;
+	}
+	copyFileSync(file, `${file}.dev-load-backup`);
+	writeFileSync(file, before.replace(variant.patch.find, variant.patch.replace));
+	console.log(`  patched ${variant.patch.pkg}/${variant.patch.file}`);
+	return file;
+}
+
+function restorePatch(file) {
+	if (!file) return;
+	if (existsSync(`${file}.dev-load-backup`)) {
+		copyFileSync(`${file}.dev-load-backup`, file);
+		unlinkSync(`${file}.dev-load-backup`);
+	}
+}
+
 function restoreInstall() {
 	for (const path of [pkgPath, lockPath]) {
 		if (existsSync(`${path}.dev-load-backup`)) {
@@ -489,8 +533,24 @@ async function measureVariant(variant) {
 	console.log(`\n=== ${variant.id} — ${variant.description}`);
 	let installed = false;
 	let configFile = null;
+	let patchedFile = null;
 	try {
 		installed = await applyInstall(variant);
+		// After applyInstall, so the patch lands on whatever version this variant
+		// installed rather than on the one it replaced.
+		patchedFile = applyPatch(variant);
+		if (patchedFile === null && variant.patch) {
+			return {
+				...variant,
+				versions: installedVersions(),
+				startup: summariseStartup({ ready: false, attempts: [] }),
+				cacheFailures: [],
+				setup: null,
+				routes: [],
+				healthy: false,
+				verdict: "NOT RUN — the patch did not apply, so this would have measured unpatched code",
+			};
+		}
 		configFile = writeVariantConfig(variant);
 
 		// D1 persists under .wrangler in the project, so this is also a fresh database.
@@ -588,6 +648,9 @@ async function measureVariant(variant) {
 	} finally {
 		await stopDevServer();
 		if (configFile) rmSync(configFile.path, { force: true });
+		// Before any reinstall, and unconditionally: a patch left behind would
+		// silently become part of every later variant in the same run.
+		restorePatch(patchedFile);
 		if (installed) {
 			restoreInstall();
 			await pnpm(["install", "--frozen-lockfile"]);
