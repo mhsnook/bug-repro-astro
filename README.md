@@ -81,9 +81,14 @@ Measured here by `pnpm dev-load`, median of three healthy responses a route, wit
 | `/bare-query` | 9.55s | 0.65s |
 | `/_emdash/admin` | 1.03s | 0.22s |
 
+Both arms of that table come from one linux machine, which is slower than the CI runners
+— they put the same baseline at 4.05s where this one puts it at 9.31s. Read the ratio
+rather than the seconds. The arms are only comparable to each other, and only CI's
+numbers are comparable across platforms.
+
 Under `DEBUG=vite:transform` the same change measured 7.98s → 1.41s, and six modules
-re-transforming per request against two. The instrumentation inflates both arms, so the
-ratio is the finding rather than the absolute times.
+re-transforming per request against two. The instrumentation inflates both arms, so again
+the ratio is the finding rather than the absolute times.
 
 ## When this started
 
@@ -156,18 +161,35 @@ edited:
 
 | platform | `hotUpdate` hooks per request | files under `.wrangler` |
 | --- | --- | --- |
-| ubuntu-latest | 3.5 | 18 |
+| ubuntu-latest | 3 to 3.5 | 18 |
 | windows-latest | 3 | 18 |
 | macos-latest | **0** | 18 |
 
-Measured on `@cloudflare/vite-plugin` 1.54.4. Against the same table on 1.54.2 the hook
-counts are unchanged — 4, 3 and 0 — while the file count doubled on every platform, so
-what 1.54.4 added is more state, not more reporting.
+Measured on `@cloudflare/vite-plugin` 1.54.4, over two runs; ubuntu reported 21 hooks
+across six requests in one and 18 in the other, which is the only figure that moved.
+Against the same table on 1.54.2 the counts are unchanged — 4, 3 and 0 — while the file
+count doubled on every platform, so what 1.54.4 added is more state, not more reporting.
 
-macOS writes the same eighteen files and its watcher reports none of them, which is why
-the same site loads in 0.05s there and 9 to 10s on the other two. Why the writes go
-unreported on macOS is still open — chokidar's polling and FSEvents defaults are the
-obvious places to look, and neither has been checked.
+macOS is the useful case, because nobody configured it. It writes the same eighteen
+files, its watcher reports none of them, and `repro/emdash-slowdown` on the same commit
+serves the same routes in a different order of magnitude:
+
+| platform | `/` | `/posts` | `/plain` | `/bare-query` |
+| --- | --- | --- | --- | --- |
+| macos node 26 | **0.06s** | 0.05s | 0.04s | 0.04s |
+| macos node 22 | **0.15s** | 0.09s | 0.08s | 0.13s |
+| linux node 22 | 4.05s | 3.98s | 3.61s | 3.99s |
+| linux node 26 | 5.26s | 4.97s | 4.33s | 4.67s |
+| windows node 22 | 5.52s | 6.06s | 5.26s | 6.10s |
+| windows node 26 | 8.25s | 7.63s | 7.15s | 8.06s |
+
+Same versions, same lockfile, same code on every row. The only thing that differs is
+whether the platform's watcher reports the writes, and the platform that does not report
+them is two orders of magnitude faster — which is the same result as setting
+`watch.ignored`, arrived at without setting anything.
+
+Why the writes go unreported on macOS is still open — chokidar's polling and FSEvents
+defaults are the obvious places to look, and neither has been checked.
 
 There is no data yet for the edit-driven path that #13425 is about, on any platform.
 
