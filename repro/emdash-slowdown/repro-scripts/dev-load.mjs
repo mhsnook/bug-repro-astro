@@ -72,53 +72,81 @@ const SLOW_THRESHOLD_MS = Number(args.threshold ?? 2_000);
 // drifts into one of them: at 5s it called a leg serving 4.9s pages "working".
 // The split is read from each run instead, on ratios rather than milliseconds.
 //
-// The log range is bisected. Its quarter points bound a middle band, and a
-// timing landing inside is called neither rather than rounded to the nearer
-// group. Scaling every timing by the same factor shifts the logs by a constant,
-// so the band moves with the machine and the verdicts do not change.
+// The cut goes at the widest step between neighbouring timings — the break the
+// data already has. Quarter points of the whole range were tried first and
+// misfire when one group is wide: a single unusually fast sample stretches the
+// range and drags the cutoff up into the fast group, which is how a healthy
+// macOS leg once came back "unclear".
 const BIMODAL_MIN_SPREAD = 10;
+// The widest step is only a break if it dwarfs the next widest; otherwise it is
+// ordinary spacing in a smear and cutting there puts the line anywhere. Log
+// terms, so "twice as wide" means twice as many doublings.
+const BREAK_DOMINANCE = 2;
+// A timing sitting nearly as far from its own group as the two groups sit from
+// each other is not really in that group. Fraction of the split in log terms;
+// tuned against observed runs rather than derived.
+const DETACHED_LOG_FRACTION = 0.4;
 
-// Below one order of magnitude there is no second group to find and cutting
-// anyway would split noise, so callers get an absolute answer in that case.
+// Below one order of magnitude, or without a dominant break, there is nothing
+// to split and cutting would divide noise. Callers get an absolute answer then,
+// and the report says which of the two happened.
 function splitByMode(valuesMs, absoluteMs = SLOW_THRESHOLD_MS) {
 	const sorted = valuesMs.filter((v) => typeof v === "number" && v > 0).sort((a, b) => a - b);
 	if (sorted.length < 2) return null;
 	const lo = sorted[0];
 	const hi = sorted[sorted.length - 1];
 	const spread = hi / lo;
+	const absolute = (why) => ({
+		bimodal: false,
+		why,
+		lo,
+		hi,
+		spread,
+		absoluteMs,
+		isSlow: (ms) => (ms ?? hi) >= absoluteMs,
+		isAmbiguous: () => false,
+	});
 
-	if (spread < BIMODAL_MIN_SPREAD) {
-		const slow = hi >= absoluteMs;
-		return { bimodal: false, lo, hi, spread, absoluteMs, isSlow: () => slow, isAmbiguous: () => false };
-	}
+	if (spread < BIMODAL_MIN_SPREAD) return absolute("tight");
 
-	const at = (f) => Math.exp(Math.log(lo) + (Math.log(hi) - Math.log(lo)) * f);
-	const bandLo = at(0.25);
-	const bandHi = at(0.75);
+	const steps = sorted
+		.slice(1)
+		.map((v, i) => ({ ratio: v / sorted[i], from: sorted[i], to: v }))
+		.sort((a, b) => b.ratio - a.ratio);
+	const gap = steps[0];
+	const second = steps[1]?.ratio ?? 1;
+	const dominance = second > 1 ? Math.log(gap.ratio) / Math.log(second) : Infinity;
+	if (!(gap.ratio > 1) || dominance < BREAK_DOMINANCE) return absolute("smear");
 
-	// Widest ratio between neighbours: where the data itself breaks. Reported so
-	// a cutoff that has drifted onto a populated stretch is visible rather than
-	// quietly deciding legs.
-	let gap = { ratio: 1, from: lo, to: lo };
-	for (let i = 1; i < sorted.length; i++) {
-		const ratio = sorted[i] / sorted[i - 1];
-		if (ratio > gap.ratio) gap = { ratio, from: sorted[i - 1], to: sorted[i] };
-	}
-
-	// A cutoff is only safe where nothing sits near it. Clearance is the ratio
-	// across the empty stretch it lands in.
-	const clearance = (cut) => {
-		const below = sorted.filter((v) => v <= cut).pop() ?? lo;
-		const above = sorted.find((v) => v > cut) ?? hi;
-		return { below, above, ratio: above / below };
+	const isSlow = (ms) => ms >= gap.to;
+	// Nearest neighbour on the same side of the break. A value far from it is
+	// detached, and reported as neither rather than rounded into a group it is
+	// not really part of.
+	const detachment = (ms) => {
+		const peers = sorted.filter((v) => v !== ms && isSlow(v) === isSlow(ms));
+		if (peers.length === 0) return Infinity;
+		const nearest = peers.reduce((best, v) =>
+			Math.abs(Math.log(v / ms)) < Math.abs(Math.log(best / ms)) ? v : best,
+		);
+		return Math.max(nearest / ms, ms / nearest);
 	};
+	const isAmbiguous = (ms) =>
+		Math.log(detachment(ms)) / Math.log(gap.ratio) >= DETACHED_LOG_FRACTION;
 
 	return {
-		bimodal: true, lo, hi, spread, bandLo, bandHi, gap,
-		clearLo: clearance(bandLo),
-		clearHi: clearance(bandHi),
-		isSlow: (ms) => ms > bandHi,
-		isAmbiguous: (ms) => ms >= bandLo && ms <= bandHi,
+		bimodal: true,
+		lo,
+		hi,
+		spread,
+		gap,
+		dominance,
+		second,
+		bandLo: gap.from,
+		bandHi: gap.to,
+		isAmbiguous,
+		// Detached wins: a value that is not firmly in either group must not be
+		// counted as firmly slow.
+		isSlow: (ms) => isSlow(ms) && !isAmbiguous(ms),
 	};
 }
 // In CI the leg names itself, so the workflow carries no --label or --out and
@@ -737,20 +765,19 @@ if (args.compare) {
 	const gapLine = () => {
 		if (!split) return "Not enough timings to tell the two groups apart.";
 		if (!split.bimodal) {
-			return `Every route landed within ${split.spread.toFixed(1)}x of every other, so there are not two groups here to separate. Judged outright against ${seconds(split.absoluteMs)}s: ${split.isSlow() ? "slow" : "fast"}.`;
+			return split.why === "tight"
+				? `Every route landed within ${split.spread.toFixed(1)}x of every other, so there are not two groups here to separate. Judged outright against ${seconds(split.absoluteMs)}s.`
+				: `**No step between neighbouring timings is wide enough to be a break rather than ordinary spacing, so there are no two groups to find here. Judged outright against ${seconds(split.absoluteMs)}s instead.**`;
 		}
-		const warn = [];
-		if (split.clearLo.ratio < 1.5) warn.push(`working cutoff (nearest timings ${seconds(split.clearLo.below)}s and ${seconds(split.clearLo.above)}s)`);
-		if (split.clearHi.ratio < 1.5) warn.push(`failing cutoff (nearest timings ${seconds(split.clearHi.below)}s and ${seconds(split.clearHi.above)}s)`);
-		return [
+		const line = [
 			`Fastest route ${seconds(split.lo)}s, slowest ${seconds(split.hi)}s, a ${Math.round(split.spread)}x spread.`,
-			`Working is under ${seconds(split.bandLo)}s and failing is over ${seconds(split.bandHi)}s;`,
-			"in between is reported as neither rather than rounded to the nearer group.",
-			`The widest step between neighbouring timings is ${split.gap.ratio.toFixed(1)}x, ${seconds(split.gap.from)}s to ${seconds(split.gap.to)}s.`,
-			warn.length
-				? `**Timings sit close to the ${warn.join(" and ")}, so that cutoff is deciding legs on noise.**`
-				: `Both cutoffs land on empty stretches (${split.clearLo.ratio.toFixed(1)}x and ${split.clearHi.ratio.toFixed(1)}x wide), so the groups are separated by the data.`,
-		].join(" ");
+			`The widest step between neighbouring timings is ${split.gap.ratio.toFixed(1)}x, ${seconds(split.gap.from)}s to ${seconds(split.gap.to)}s, and the split goes there.`,
+		];
+		line.push(
+			`That is ${split.dominance.toFixed(1)}x the next widest step (${split.second.toFixed(1)}x) in log terms, so it is a break and not ordinary spacing.`,
+			"Working is everything below it and failing everything above, except that a timing sitting nearly as far from its own group as the groups sit from each other is reported as neither.",
+		);
+		return line.join(" ");
 	};
 
 	const ids = [...new Set(runs.flatMap((r) => r.variants.map((v) => v.id)))];
