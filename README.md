@@ -145,6 +145,10 @@ Applied to the installed 1.54.4 and run against this repository's stock
 `astro.config.mjs`, with no user-side Vite configuration at all, `/` goes from 9.31s to
 0.77s and `repro/minimal` from three `hotUpdate` hooks a request to none.
 
+The change, with a test covering both the exclusion and the merge with a user's own
+`server.watch.ignored`, is at
+[mhsnook/workers-sdk@`7115d27`](https://github.com/mhsnook/workers-sdk/commit/7115d27).
+
 ## Also here
 
 - [#1](../../issues/1) — the running log of what has been established and corrected
