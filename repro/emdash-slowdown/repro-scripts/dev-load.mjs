@@ -67,29 +67,29 @@ const STARTUP_TIMEOUT_MS = Number(args["startup-timeout"] ?? 120_000);
 const START_ATTEMPTS = Number(args["start-attempts"] ?? 2);
 const SLOW_THRESHOLD_MS = Number(args.threshold ?? 2_000);
 
-// Page loads here are bimodal by better than an order of magnitude, and both
-// groups move together on a faster or slower machine, so a fixed threshold
-// drifts into one of them: at 5s it called a leg serving 4.9s pages "working".
-// The split is read from each run instead, on ratios rather than milliseconds.
-//
-// The cut goes at the widest step between neighbouring timings — the break the
-// data already has. Quarter points of the whole range were tried first and
-// misfire when one group is wide: a single unusually fast sample stretches the
-// range and drags the cutoff up into the fast group, which is how a healthy
-// macOS leg once came back "unclear".
+// Page loads separate by better than an order of magnitude, and every group
+// moves together on a faster or slower machine, so a fixed threshold drifts
+// into one of them: at 5s it once called a leg serving 4.9s pages "working".
 const BIMODAL_MIN_SPREAD = 10;
-// The widest step is only a break if it dwarfs the next widest; otherwise it is
-// ordinary spacing in a smear and cutting there puts the line anywhere. Log
-// terms, so "twice as wide" means twice as many doublings.
-const BREAK_DOMINANCE = 2;
-// A timing sitting nearly as far from its own group as the two groups sit from
-// each other is not really in that group. Fraction of the split in log terms;
+// A break has to be a real jump, not the widest of a smear.
+const BREAK_MIN_RATIO = 2.5;
+// Steps at least half as wide as the widest, in log terms, are breaks too. This
+// data has more than one: macOS pages, the admin route on affected platforms
+// (warmed by setup before timing starts), and their content routes are three
+// groups, not two.
+const BREAK_RELATIVE = 0.5;
+// A lone timing sitting nearly as far from its own group as the groups sit from
+// each other is not really in it. Fraction of the widest break in log terms;
 // tuned against observed runs rather than derived.
 const DETACHED_LOG_FRACTION = 0.4;
 
-// Below one order of magnitude, or without a dominant break, there is nothing
-// to split and cutting would divide noise. Callers get an absolute answer then,
-// and the report says which of the two happened.
+// Groups are found per run: the timings are sorted and cut at every step wide
+// enough to be a break. Slowest group fails, fastest works, anything between is
+// reported as neither. Ratios decide throughout, so a uniformly faster or
+// slower machine moves every group together and the verdicts hold.
+//
+// Without a wide enough spread, or without any real jump in it, there is
+// nothing to cut and callers get an absolute answer instead.
 function splitByMode(valuesMs, absoluteMs = SLOW_THRESHOLD_MS) {
 	const sorted = valuesMs.filter((v) => typeof v === "number" && v > 0).sort((a, b) => a - b);
 	if (sorted.length < 2) return null;
@@ -113,40 +113,46 @@ function splitByMode(valuesMs, absoluteMs = SLOW_THRESHOLD_MS) {
 		.slice(1)
 		.map((v, i) => ({ ratio: v / sorted[i], from: sorted[i], to: v }))
 		.sort((a, b) => b.ratio - a.ratio);
-	const gap = steps[0];
-	const second = steps[1]?.ratio ?? 1;
-	const dominance = second > 1 ? Math.log(gap.ratio) / Math.log(second) : Infinity;
-	if (!(gap.ratio > 1) || dominance < BREAK_DOMINANCE) return absolute("smear");
+	const widest = steps[0];
+	if (widest.ratio < BREAK_MIN_RATIO) return absolute("smear");
 
-	const isSlow = (ms) => ms >= gap.to;
-	// Nearest neighbour on the same side of the break. A value far from it is
-	// detached, and reported as neither rather than rounded into a group it is
-	// not really part of.
-	const detachment = (ms) => {
-		const peers = sorted.filter((v) => v !== ms && isSlow(v) === isSlow(ms));
-		if (peers.length === 0) return Infinity;
+	const breaks = steps
+		.filter((st) => Math.log(st.ratio) >= Math.log(widest.ratio) * BREAK_RELATIVE)
+		.sort((a, b) => a.from - b.from);
+	const edges = breaks.map((b) => b.to);
+	const groupOf = (ms) => edges.filter((e) => ms >= e).length;
+	const top = breaks.length;
+
+	// Nearest neighbour inside the same group. Far from it means the value is
+	// carried by nothing and should not firm up a verdict on its own.
+	const detached = (ms) => {
+		const peers = sorted.filter((v) => v !== ms && groupOf(v) === groupOf(ms));
+		if (peers.length === 0) return true;
 		const nearest = peers.reduce((best, v) =>
 			Math.abs(Math.log(v / ms)) < Math.abs(Math.log(best / ms)) ? v : best,
 		);
-		return Math.max(nearest / ms, ms / nearest);
+		const apart = Math.max(nearest / ms, ms / nearest);
+		return Math.log(apart) / Math.log(widest.ratio) >= DETACHED_LOG_FRACTION;
 	};
-	const isAmbiguous = (ms) =>
-		Math.log(detachment(ms)) / Math.log(gap.ratio) >= DETACHED_LOG_FRACTION;
+
+	const isAmbiguous = (ms) => {
+		const g = groupOf(ms);
+		return (g > 0 && g < top) || detached(ms);
+	};
 
 	return {
 		bimodal: true,
 		lo,
 		hi,
 		spread,
-		gap,
-		dominance,
-		second,
-		bandLo: gap.from,
-		bandHi: gap.to,
+		gap: widest,
+		breaks,
+		groups: top + 1,
+		bandLo: widest.from,
+		bandHi: widest.to,
 		isAmbiguous,
-		// Detached wins: a value that is not firmly in either group must not be
-		// counted as firmly slow.
-		isSlow: (ms) => isSlow(ms) && !isAmbiguous(ms),
+		// Not firmly in the slowest group means not firm evidence of it.
+		isSlow: (ms) => groupOf(ms) === top && !isAmbiguous(ms),
 	};
 }
 // In CI the leg names itself, so the workflow carries no --label or --out and
@@ -746,7 +752,7 @@ if (args.compare) {
 			);
 		}
 		if (slowest) seen.add(`up to ${slowest} slow route${slowest === 1 ? "" : "s"}`);
-		if (middling) seen.add(`${middling} route${middling === 1 ? "" : "s"} between the two groups`);
+		if (middling) seen.add(`${middling} route${middling === 1 ? "" : "s"} in neither group`);
 		return [...seen];
 	};
 
@@ -771,11 +777,12 @@ if (args.compare) {
 		}
 		const line = [
 			`Fastest route ${seconds(split.lo)}s, slowest ${seconds(split.hi)}s, a ${Math.round(split.spread)}x spread.`,
-			`The widest step between neighbouring timings is ${split.gap.ratio.toFixed(1)}x, ${seconds(split.gap.from)}s to ${seconds(split.gap.to)}s, and the split goes there.`,
+			`The widest step between neighbouring timings is ${split.gap.ratio.toFixed(1)}x, ${seconds(split.gap.from)}s to ${seconds(split.gap.to)}s.`,
 		];
 		line.push(
-			`That is ${split.dominance.toFixed(1)}x the next widest step (${split.second.toFixed(1)}x) in log terms, so it is a break and not ordinary spacing.`,
-			"Working is everything below it and failing everything above, except that a timing sitting nearly as far from its own group as the groups sit from each other is reported as neither.",
+			split.groups === 2
+				? "That is the only break, so there are two groups: working below it, failing above."
+				: `${split.breaks.length} steps are wide enough to be breaks, giving ${split.groups} groups: ${split.breaks.map((b) => `${seconds(b.from)}s to ${seconds(b.to)}s (${b.ratio.toFixed(1)}x)`).join(", ")}. The slowest group fails, the fastest works, the rest are neither.`,
 		);
 		return line.join(" ");
 	};
@@ -824,11 +831,12 @@ if (args.compare) {
 					"variant is not evidence of health, it is a leg with nothing to report,",
 					"and it can come out of the matrix.",
 					"",
-					"Renders are read as a verdict, not a score. The two groups are found in",
-					"each run rather than fixed in advance: the timings are sorted, the log",
-					"range between fastest and slowest is bisected, and its quarter points",
-					"become the cutoffs. Ratios decide, so a uniformly faster or slower",
-					"machine moves both groups together and the verdicts hold.",
+					"Renders are read as a verdict, not a score. The groups are found in each",
+					"run rather than fixed in advance: the timings are sorted and cut at every",
+					"step wide enough to be a break. The slowest group fails, the fastest",
+					"works, and anything between them is reported as neither. Ratios decide,",
+					"so a uniformly faster or slower machine moves every group together and",
+					"the verdicts hold.",
 					"",
 					gapLine(),
 					"",
