@@ -9,6 +9,14 @@ on:
       repeats:
         description: Healthy 200s wanted per route. Blank uses the script's default.
 
+# Keyed on the pull request rather than the ref, falling back to a run id that
+# never repeats, so a manual dispatch neither cancels a pull request's run nor
+# gets cancelled by one. A dispatch is usually a measurement someone is waiting
+# on, and every leg here costs minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 # This file holds only what GitHub Actions has to own: the triggers, the shared
 # steps, and the order the jobs run in. Which machines run, which node versions,
 # which reproduction each leg measures, what it measures and how the report
