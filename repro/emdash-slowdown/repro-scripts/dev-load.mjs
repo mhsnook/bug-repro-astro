@@ -66,6 +66,61 @@ const REQUEST_TIMEOUT_MS = Number(args["request-timeout"] ?? 60_000);
 const STARTUP_TIMEOUT_MS = Number(args["startup-timeout"] ?? 120_000);
 const START_ATTEMPTS = Number(args["start-attempts"] ?? 2);
 const SLOW_THRESHOLD_MS = Number(args.threshold ?? 2_000);
+
+// Page loads here are bimodal by better than an order of magnitude, and both
+// groups move together on a faster or slower machine, so a fixed threshold
+// drifts into one of them: at 5s it called a leg serving 4.9s pages "working".
+// The split is read from each run instead, on ratios rather than milliseconds.
+//
+// The log range is bisected. Its quarter points bound a middle band, and a
+// timing landing inside is called neither rather than rounded to the nearer
+// group. Scaling every timing by the same factor shifts the logs by a constant,
+// so the band moves with the machine and the verdicts do not change.
+const BIMODAL_MIN_SPREAD = 10;
+
+// Below one order of magnitude there is no second group to find and cutting
+// anyway would split noise, so callers get an absolute answer in that case.
+function splitByMode(valuesMs, absoluteMs = SLOW_THRESHOLD_MS) {
+	const sorted = valuesMs.filter((v) => typeof v === "number" && v > 0).sort((a, b) => a - b);
+	if (sorted.length < 2) return null;
+	const lo = sorted[0];
+	const hi = sorted[sorted.length - 1];
+	const spread = hi / lo;
+
+	if (spread < BIMODAL_MIN_SPREAD) {
+		const slow = hi >= absoluteMs;
+		return { bimodal: false, lo, hi, spread, absoluteMs, isSlow: () => slow, isAmbiguous: () => false };
+	}
+
+	const at = (f) => Math.exp(Math.log(lo) + (Math.log(hi) - Math.log(lo)) * f);
+	const bandLo = at(0.25);
+	const bandHi = at(0.75);
+
+	// Widest ratio between neighbours: where the data itself breaks. Reported so
+	// a cutoff that has drifted onto a populated stretch is visible rather than
+	// quietly deciding legs.
+	let gap = { ratio: 1, from: lo, to: lo };
+	for (let i = 1; i < sorted.length; i++) {
+		const ratio = sorted[i] / sorted[i - 1];
+		if (ratio > gap.ratio) gap = { ratio, from: sorted[i - 1], to: sorted[i] };
+	}
+
+	// A cutoff is only safe where nothing sits near it. Clearance is the ratio
+	// across the empty stretch it lands in.
+	const clearance = (cut) => {
+		const below = sorted.filter((v) => v <= cut).pop() ?? lo;
+		const above = sorted.find((v) => v > cut) ?? hi;
+		return { below, above, ratio: above / below };
+	};
+
+	return {
+		bimodal: true, lo, hi, spread, bandLo, bandHi, gap,
+		clearLo: clearance(bandLo),
+		clearHi: clearance(bandHi),
+		isSlow: (ms) => ms > bandHi,
+		isAmbiguous: (ms) => ms >= bandLo && ms <= bandHi,
+	};
+}
 // In CI the leg names itself, so the workflow carries no --label or --out and
 // stays untouched when the reporting changes.
 const CI_LEG = process.env.GITHUB_ACTIONS
@@ -462,11 +517,16 @@ async function measureVariant(variant) {
 		const healthy = setup.status === 200 && routes.every((r) => r.complete);
 		const timed = routes.filter((r) => r.medianMs !== null);
 		const worst = timed.length ? Math.max(...timed.map((r) => r.medianMs)) : null;
+		const split = splitByMode(timed.map((r) => r.medianMs));
 		const verdict = !healthy
 			? `BROKEN — ${describeUnhealthy(setup, routes)}; do not compare these timings`
-			: worst >= SLOW_THRESHOLD_MS
-				? `SLOW — worst median ${seconds(worst)}s, over the ${seconds(SLOW_THRESHOLD_MS)}s threshold`
-				: `FAST — worst median ${seconds(worst)}s, under the ${seconds(SLOW_THRESHOLD_MS)}s threshold`;
+			: !split
+				? "NO DATA — nothing timed"
+				: !split.bimodal
+					? `${split.isSlow() ? "SLOW" : "FAST"} — every route within ${split.spread.toFixed(1)}x of the others, worst ${seconds(worst)}s, judged against ${seconds(split.absoluteMs)}s`
+					: timed.some((r) => split.isSlow(r.medianMs))
+						? `SLOW — ${timed.filter((r) => split.isSlow(r.medianMs)).length} of ${timed.length} routes over ${seconds(split.bandHi)}s, worst ${seconds(worst)}s`
+						: `FAST — every route under ${seconds(split.bandHi)}s, worst ${seconds(worst)}s`;
 
 		console.log(`  ${verdict}`);
 		return {
@@ -629,8 +689,10 @@ if (args.compare) {
 	// of a second, or seconds. The threshold sits in that gap.
 	const rendersOf = (run) => {
 		const timed = run.variants.flatMap((v) => v.routes.filter((r) => r.medianMs !== null));
-		if (timed.length === 0) return "—";
-		return timed.some((r) => r.medianMs >= run.settings.thresholdMs) ? "**failing**" : "working";
+		if (timed.length === 0 || !split) return "—";
+		if (timed.some((r) => split.isSlow(r.medianMs))) return "**failing**";
+		if (timed.some((r) => split.isAmbiguous(r.medianMs))) return "unclear";
+		return "working";
 	};
 
 	const symptomsOf = (run) => {
@@ -638,6 +700,7 @@ if (args.compare) {
 		// Worst across variants, counted once: two variants seeing 2 and 3 slow
 		// routes is one symptom at its worst, not two separate findings.
 		let slowest = 0;
+		let middling = 0;
 		for (const v of run.variants) {
 			if (!v.startup?.ready) seen.add("dev server dead");
 			else if (v.startup.coldStartCrashed) seen.add("cold-start crash");
@@ -647,36 +710,43 @@ if (args.compare) {
 			}
 			slowest = Math.max(
 				slowest,
-				v.routes.filter((r) => r.medianMs !== null && r.medianMs >= run.settings.thresholdMs)
-					.length,
+				v.routes.filter((r) => r.medianMs !== null && split?.isSlow(r.medianMs)).length,
+			);
+			middling = Math.max(
+				middling,
+				v.routes.filter((r) => r.medianMs !== null && split?.isAmbiguous(r.medianMs)).length,
 			);
 		}
 		if (slowest) seen.add(`up to ${slowest} slow route${slowest === 1 ? "" : "s"}`);
+		if (middling) seen.add(`${middling} route${middling === 1 ? "" : "s"} between the two groups`);
 		return [...seen];
 	};
 
-	// The working/failing split is only trustworthy while no route lands near the
-	// threshold. Reporting the band makes a run that closes it say so, instead of
-	// letting noise quietly move a leg across.
+	// One split for the whole report, pooled across every leg, so the platforms
+	// are read against each other rather than each against its own spread.
+	const split = splitByMode(
+		runs.flatMap((r) =>
+			r.variants.flatMap((v) => v.routes.filter((x) => x.medianMs !== null).map((x) => x.medianMs)),
+		),
+	);
+
 	const gapLine = () => {
-		const all = runs.flatMap((r) =>
-			r.variants.flatMap((v) =>
-				v.routes.filter((x) => x.medianMs !== null).map((x) => x.medianMs),
-			),
-		);
-		const t = runs[0].settings.thresholdMs;
-		const under = all.filter((ms) => ms < t);
-		const over = all.filter((ms) => ms >= t);
-		if (!under.length || !over.length) {
-			return `Threshold ${seconds(t)}s. Every route measured landed on one side of it, so nothing here separates working from failing.`;
+		if (!split) return "Not enough timings to tell the two groups apart.";
+		if (!split.bimodal) {
+			return `Every route landed within ${split.spread.toFixed(1)}x of every other, so there are not two groups here to separate. Judged outright against ${seconds(split.absoluteMs)}s: ${split.isSlow() ? "slow" : "fast"}.`;
 		}
-		const hi = Math.max(...under);
-		const lo = Math.min(...over);
-		const line = `Threshold ${seconds(t)}s. Slowest working route ${seconds(hi)}s, fastest failing route ${seconds(lo)}s — an empty band of ${seconds(lo - hi)}s around it.`;
-		// Two-fold clearance either side is the margin these runs vary by.
-		return hi * 2 > t || lo < t * 2
-			? `${line} **That band is too tight to classify on: a leg can cross it on noise alone.**`
-			: line;
+		const warn = [];
+		if (split.clearLo.ratio < 1.5) warn.push(`working cutoff (nearest timings ${seconds(split.clearLo.below)}s and ${seconds(split.clearLo.above)}s)`);
+		if (split.clearHi.ratio < 1.5) warn.push(`failing cutoff (nearest timings ${seconds(split.clearHi.below)}s and ${seconds(split.clearHi.above)}s)`);
+		return [
+			`Fastest route ${seconds(split.lo)}s, slowest ${seconds(split.hi)}s, a ${Math.round(split.spread)}x spread.`,
+			`Working is under ${seconds(split.bandLo)}s and failing is over ${seconds(split.bandHi)}s;`,
+			"in between is reported as neither rather than rounded to the nearer group.",
+			`The widest step between neighbouring timings is ${split.gap.ratio.toFixed(1)}x, ${seconds(split.gap.from)}s to ${seconds(split.gap.to)}s.`,
+			warn.length
+				? `**Timings sit close to the ${warn.join(" and ")}, so that cutoff is deciding legs on noise.**`
+				: `Both cutoffs land on empty stretches (${split.clearLo.ratio.toFixed(1)}x and ${split.clearHi.ratio.toFixed(1)}x wide), so the groups are separated by the data.`,
+		].join(" ");
 	};
 
 	const ids = [...new Set(runs.flatMap((r) => r.variants.map((v) => v.id)))];
@@ -723,10 +793,11 @@ if (args.compare) {
 					"variant is not evidence of health, it is a leg with nothing to report,",
 					"and it can come out of the matrix.",
 					"",
-					"Renders are read as a verdict, not a score. Sub-second is what a hosted",
-					"worker should do and counts as working; the failing platforms take seconds.",
-					"That only holds up while the threshold sits in an empty band, so the run",
-					"measures the band rather than asserting it:",
+					"Renders are read as a verdict, not a score. The two groups are found in",
+					"each run rather than fixed in advance: the timings are sorted, the log",
+					"range between fastest and slowest is bisected, and its quarter points",
+					"become the cutoffs. Ratios decide, so a uniformly faster or slower",
+					"machine moves both groups together and the verdicts hold.",
 					"",
 					gapLine(),
 					"",
@@ -815,13 +886,21 @@ for (const variant of selected) {
 const anyReady = results.some((v) => v.startup.ready);
 const healthy = results.filter((v) => v.healthy);
 const slowest = healthy.length ? Math.max(...healthy.map((v) => v.worstMedianMs ?? 0)) : null;
+const runSplit = splitByMode(
+	healthy.flatMap((v) => v.routes.filter((r) => r.medianMs !== null).map((r) => r.medianMs)),
+);
+const affected = runSplit?.bimodal
+	? healthy.some((v) => v.routes.some((r) => r.medianMs !== null && runSplit.isSlow(r.medianMs)))
+	: runSplit?.isSlow();
 const verdict = !anyReady
 	? "DEAD — no variant produced a running dev server"
 	: healthy.length === 0
 		? "BROKEN — no variant produced a healthy setup, so nothing here is comparable"
-		: slowest >= SLOW_THRESHOLD_MS
-			? `AFFECTED — slowest healthy median ${seconds(slowest)}s, over the ${seconds(SLOW_THRESHOLD_MS)}s threshold`
-			: `NOT AFFECTED — slowest healthy median ${seconds(slowest)}s, under the ${seconds(SLOW_THRESHOLD_MS)}s threshold`;
+		: !runSplit
+			? "NO DATA — nothing timed"
+			: affected
+				? `AFFECTED — slowest healthy median ${seconds(slowest)}s${runSplit.bimodal ? `, against a fast group topping out at ${seconds(runSplit.bandLo)}s` : ""}`
+				: `NOT AFFECTED — slowest healthy median ${seconds(slowest)}s`;
 
 const result = {
 	label: LABEL,
