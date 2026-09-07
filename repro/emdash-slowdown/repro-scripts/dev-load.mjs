@@ -65,7 +65,7 @@ const MIN_BYTES = Number(args["min-bytes"] ?? 1_000);
 const REQUEST_TIMEOUT_MS = Number(args["request-timeout"] ?? 60_000);
 const STARTUP_TIMEOUT_MS = Number(args["startup-timeout"] ?? 120_000);
 const START_ATTEMPTS = Number(args["start-attempts"] ?? 2);
-const SLOW_THRESHOLD_MS = Number(args.threshold ?? 5_000);
+const SLOW_THRESHOLD_MS = Number(args.threshold ?? 2_000);
 // In CI the leg names itself, so the workflow carries no --label or --out and
 // stays untouched when the reporting changes.
 const CI_LEG = process.env.GITHUB_ACTIONS
@@ -655,6 +655,30 @@ if (args.compare) {
 		return [...seen];
 	};
 
+	// The working/failing split is only trustworthy while no route lands near the
+	// threshold. Reporting the band makes a run that closes it say so, instead of
+	// letting noise quietly move a leg across.
+	const gapLine = () => {
+		const all = runs.flatMap((r) =>
+			r.variants.flatMap((v) =>
+				v.routes.filter((x) => x.medianMs !== null).map((x) => x.medianMs),
+			),
+		);
+		const t = runs[0].settings.thresholdMs;
+		const under = all.filter((ms) => ms < t);
+		const over = all.filter((ms) => ms >= t);
+		if (!under.length || !over.length) {
+			return `Threshold ${seconds(t)}s. Every route measured landed on one side of it, so nothing here separates working from failing.`;
+		}
+		const hi = Math.max(...under);
+		const lo = Math.min(...over);
+		const line = `Threshold ${seconds(t)}s. Slowest working route ${seconds(hi)}s, fastest failing route ${seconds(lo)}s — an empty band of ${seconds(lo - hi)}s around it.`;
+		// Two-fold clearance either side is the margin these runs vary by.
+		return hi * 2 > t || lo < t * 2
+			? `${line} **That band is too tight to classify on: a leg can cross it on noise alone.**`
+			: line;
+	};
+
 	const ids = [...new Set(runs.flatMap((r) => r.variants.map((v) => v.id)))];
 	const paths = [...new Set(runs.flatMap((r) => r.variants.flatMap((v) => v.routes.map((x) => x.path))))];
 	const md = [
@@ -700,9 +724,11 @@ if (args.compare) {
 					"and it can come out of the matrix.",
 					"",
 					"Renders are read as a verdict, not a score. Sub-second is what a hosted",
-					"worker should do and counts as working. Nothing lands between that and",
-					"the several seconds the failing platforms take, so the gap does the",
-					"classifying and run-to-run noise never decides it.",
+					"worker should do and counts as working; the failing platforms take seconds.",
+					"That only holds up while the threshold sits in an empty band, so the run",
+					"measures the band rather than asserting it:",
+					"",
+					gapLine(),
 					"",
 					"| platform | renders | symptoms |",
 					"| --- | --- | --- |",
