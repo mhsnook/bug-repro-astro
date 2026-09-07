@@ -53,11 +53,28 @@ pnpm install
 pnpm dev-load
 ```
 
-Astro's middleware plugin is such a plugin. Its `hotUpdate` handler takes no arguments,
-so it cannot inspect the change:
+Astro's middleware plugin is such a plugin, since 7.2.1. This is a regression, not how
+the plugin was written. Up to and including 7.2.0 it watched for changes itself and
+returned early twice before invalidating anything:
 
 ```js
-// astro/dist/core/middleware/vite-plugin.js
+// astro 7.2.0, dist/core/middleware/vite-plugin.js
+server.watcher.on("change", (path) => {
+  const normalizedPath = viteNormalizePath(path);
+  if (!normalizedPath.startsWith(normalizedSrcDir)) return;      // not under srcDir
+  const relativePath = normalizedPath.slice(normalizedSrcDir.length);
+  if (!isMiddlewarePath(relativePath)) return;                   // not the middleware
+  // ...invalidate
+});
+```
+
+A write under `.wrangler/state` fails the first of those. It costs nothing.
+
+7.2.1 replaced that with a `hotUpdate` handler that takes no arguments, so it cannot
+inspect the change and invalidates on every event:
+
+```js
+// astro 7.3.1, same file
 hotUpdate: {
   handler() {
     if (!isAstroServerEnvironment(this.environment)) return;
@@ -69,6 +86,16 @@ hotUpdate: {
   }
 }
 ```
+
+`isMiddlewarePath` is still defined in that file, and still exported, with no callers left
+in 7.2.1 or 7.3.1. Counting occurrences of `isMiddlewarePath(` in the shipped file gives
+two in 7.2.0 and one — the definition — in both later versions.
+
+The change came from [withastro/astro#17605](https://github.com/withastro/astro/pull/17605),
+merged 2026-08-06, which closed [#17590](https://github.com/withastro/astro/issues/17590)
+by making transitive imports of the middleware trigger HMR. Widening what counts as a
+change is the point of that PR; dropping the path check looks incidental to it. The new
+hook can still take `ctx`, which is what TanStack Start's two handlers do.
 
 Measured here by `pnpm dev-load`, median of three healthy responses a route, with
 `vite.server.watch.ignored` set against unset:
@@ -214,10 +241,30 @@ The plugin already knows `.wrangler` is its own, and already names it — in
 // packages/vite-plugin-cloudflare/src/plugins/config.ts
 server: {
   allowedHosts: getAllowedHosts(...),
-  watch: { ignored: ["**/.wrangler/**"] },   // this line
+  watch: { ignored: [resourcePersistencePath] },   // this line
   fs: { deny: [...defaultDeniedFiles, ...configPaths] },
 },
 ```
+
+Not a `**/.wrangler/**` glob. That covers only the default location, and the plugin
+resolves the persist directory itself:
+
+```ts
+function getPersistenceRoot(root, persistState) {
+  if (persistState === false) return;
+  return path.resolve(root, typeof persistState === "object" ? persistState.path : ".wrangler/state", "v3");
+}
+```
+
+A project that sets `persistState.path` gets a directory anywhere it likes, resolved
+against the Vite root, and the glob misses it. `resourcePersistencePath` is already
+computed from `getPersistenceRoot` a few lines further down the same file, so the fix
+should use that and follow the configuration. `persistState: false` returns undefined,
+which is the case where there is nothing to write and nothing to ignore.
+
+The workaround in the table above is written as a glob because that is what a user can
+put in their own config without knowing the resolved path. It carries the same limitation:
+if you have configured `persistState.path`, ignore that path instead.
 
 Excluding only `.wrangler` is deliberate rather than reusing the deny list: `.dev.vars`
 and the Wrangler config files are denied too, but the plugin watches those on purpose to
