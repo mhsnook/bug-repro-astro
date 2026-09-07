@@ -147,7 +147,7 @@ Applied to the installed 1.54.4 and run against this repository's stock
 
 The change, with a test covering both the exclusion and the merge with a user's own
 `server.watch.ignored`, is at
-[mhsnook/workers-sdk@`7115d27`](https://github.com/mhsnook/workers-sdk/commit/7115d27).
+[mhsnook/workers-sdk@`6d9b689`](https://github.com/mhsnook/workers-sdk/commit/6d9b689).
 
 ## Also here
 
