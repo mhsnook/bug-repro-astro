@@ -864,22 +864,38 @@ if (args.compare) {
 					"### Why those legs and not the others",
 					"",
 					"`repro/minimal` on the same runners: vite plus `@cloudflare/vite-plugin`,",
-					"no framework, no bindings, nothing edited. It counts how many `hotUpdate`",
-					"hooks a request causes, which is a property of the platform's file watcher.",
+					"no framework, no bindings, nothing edited. Writes are read off the",
+					"filesystem by comparing size and mtime around each request, so they stand",
+					"whatever the watcher reports. Hooks are what the watcher turned them into.",
 					"",
-					"| platform | hooks per request | files written under `.wrangler/state` | requests |",
+					"Each platform runs twice, because chokidar picks its backend by platform:",
+					"the `fsevents` native module on macOS, `fs.watch` everywhere else. The",
+					"`poll` rows set `useFsEvents: false`, which is the only way to put the two",
+					"backends on the same writes.",
+					"",
+					"| platform / watcher | writes per request | hooks per request | files in `.wrangler/state` |",
 					"| --- | --- | --- | --- |",
-					...watchers.map(
-						(w) =>
-							`| ${w.label} | ${w.hotUpdatesPerRequest === 0 ? "**0**" : w.hotUpdatesPerRequest} | ${w.wranglerFiles} | ${w.requests}${w.allRequestsOk ? "" : ", **not all 200**"} |`,
-					),
+					...watchers.map((w) => {
+						const writes = w.fileWritesPerRequest ?? "—";
+						const hooks = w.hotUpdatesPerRequest === 0 ? "**0**" : w.hotUpdatesPerRequest;
+						return `| ${w.label} | ${writes} | ${hooks} | ${w.wranglerFiles}${w.allRequestsOk === false ? " **not all 200**" : ""} |`;
+					}),
 					"",
-					watchers.some((w) => w.hotUpdatesPerRequest === 0)
-						? `Every platform writes the same files. ${watchers
-								.filter((w) => w.hotUpdatesPerRequest === 0)
-								.map((w) => w.label)
-								.join(", ")} never sees them, so nothing is invalidated and nothing costs anything there.`
-						: "Every platform's watcher reports the writes.",
+					// The interesting row is one that wrote and reported nothing: that is a
+					// watcher declining to see a write, not an absence of writes.
+					(() => {
+						const blind = watchers.filter(
+							(w) => (w.fileWritesPerRequest ?? 0) > 0 && w.hotUpdatesPerRequest === 0,
+						);
+						const quiet = watchers.filter((w) => (w.fileWritesPerRequest ?? 0) === 0);
+						if (blind.length) {
+							return `${blind.map((w) => `\`${w.label}\``).join(", ")} wrote on every request and reported none of it. The writes are not in question there; the watcher is.`;
+						}
+						if (quiet.length) {
+							return `${quiet.map((w) => `\`${w.label}\``).join(", ")} wrote nothing during the requests, so there was nothing for a watcher to miss.`;
+						}
+						return "Every backend reported the writes it was given.";
+					})(),
 					"",
 				]),
 		...(runs.length === 0

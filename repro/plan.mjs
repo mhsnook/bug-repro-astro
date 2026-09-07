@@ -38,17 +38,28 @@ const legs = [
 	),
 	// What triggers it. No framework, so one node version is enough; the point
 	// is the platform's file watcher, which is why it runs on all three.
-	...Object.entries(RUNNERS).map(([platform, os]) => ({
-		id: `watcher-${platform}`,
-		// The report lists these under a platform column, where "watcher-linux"
-		// would read as a platform name.
-		label: platform,
-		name: `watcher events on ${os}`,
-		os,
-		node: "22",
-		dir: "repro/minimal",
-		script: "count-hot-updates.mjs",
-	})),
+	//
+	// Twice per platform, because chokidar picks its backend by platform: the
+	// fsevents native module on macOS, fs.watch everywhere else. The poll legs
+	// take the macOS-only path away, so the two backends can be compared
+	// against the same writes instead of against each other's platforms.
+	...Object.entries(RUNNERS).flatMap(([platform, os]) =>
+		[
+			{ suffix: "", watcher: "default", how: "chokidar's own choice" },
+			{ suffix: "-poll", watcher: "poll", how: "useFsEvents false" },
+		].map(({ suffix, watcher, how }) => ({
+			id: `watcher-${platform}${suffix}`,
+			// The report lists these under a platform column, where "watcher-linux"
+			// would read as a platform name.
+			label: `${platform}/${watcher}`,
+			name: `watcher on ${os} (${how})`,
+			os,
+			node: "22",
+			dir: "repro/minimal",
+			script: "count-hot-updates.mjs",
+			args: [`--watcher=${watcher}`],
+		})),
+	),
 ];
 
 // A bad matrix fails the workflow with a parse error somewhere unhelpful, so it
@@ -101,7 +112,12 @@ if (args.run) {
 	}
 	const cwd = join(repoRoot, leg.dir);
 	mkdirSync(join(cwd, RESULTS), { recursive: true });
-	const argv = [leg.script, `--out=${RESULTS}/${leg.id}.json`, `--label=${leg.label ?? leg.id}`];
+	const argv = [
+		leg.script,
+		`--out=${RESULTS}/${leg.id}.json`,
+		`--label=${leg.label ?? leg.id}`,
+		...(leg.args ?? []),
+	];
 	for (const [envName, flag] of Object.entries(leg.passEnv ?? {})) {
 		const value = process.env[envName];
 		if (value) argv.push(`${flag}=${value}`);

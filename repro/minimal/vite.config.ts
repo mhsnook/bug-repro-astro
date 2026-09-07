@@ -16,6 +16,14 @@ function countsHotUpdates(): Plugin {
 	};
 }
 
+// Left to itself chokidar picks its backend by platform: the fsevents native
+// module on macOS, fs.watch everywhere else. REPRO_WATCHER=poll takes the
+// macOS-only path away so both backends can be run against the same writes.
+// Vite's own docs for useFsEvents: "When set to false on OS X, usePolling: true
+// becomes the default."
+const watch = process.env.REPRO_WATCHER === "poll" ? { useFsEvents: false } : undefined;
+
 export default defineConfig({
 	plugins: [cloudflare(), countsHotUpdates()],
+	server: { watch },
 });
