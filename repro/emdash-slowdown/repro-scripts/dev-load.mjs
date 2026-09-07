@@ -722,6 +722,7 @@ if (args.compare) {
 	// Page loads land in one of two places, with nothing in between: a fraction
 	// of a second, or seconds. The threshold sits in that gap.
 	const rendersOf = (run) => {
+		const split = splits.get(run.label);
 		const timed = run.variants.flatMap((v) => v.routes.filter((r) => r.medianMs !== null));
 		if (timed.length === 0 || !split) return "—";
 		if (timed.some((r) => split.isSlow(r.medianMs))) return "**failing**";
@@ -730,6 +731,7 @@ if (args.compare) {
 	};
 
 	const symptomsOf = (run) => {
+		const split = splits.get(run.label);
 		const seen = new Set();
 		// Worst across variants, counted once: two variants seeing 2 and 3 slow
 		// routes is one symptom at its worst, not two separate findings.
@@ -758,33 +760,32 @@ if (args.compare) {
 
 	// One split for the whole report, pooled across every leg, so the platforms
 	// are read against each other rather than each against its own spread.
-	// Healthy variants only. A leg whose setup broke still gets classified against
-	// this split, but must not help place the cutoffs that judge the others.
-	const split = splitByMode(
-		runs.flatMap((r) =>
-			r.variants
-				.filter((v) => v.healthy)
-				.flatMap((v) => v.routes.filter((x) => x.medianMs !== null).map((x) => x.medianMs)),
-		),
+	// One split per leg, over that leg's own timings. Pooling every leg would put
+	// the widest break on the platform boundary — macOS against Windows, which is
+	// already known — instead of on the structure inside one machine, and would
+	// make each leg's verdict depend on which other legs happened to run.
+	const splits = new Map(
+		runs.map((r) => [
+			r.label,
+			splitByMode(
+				r.variants.flatMap((v) =>
+					v.routes.filter((x) => x.medianMs !== null).map((x) => x.medianMs),
+				),
+			),
+		]),
 	);
 
-	const gapLine = () => {
-		if (!split) return "Not enough timings to tell the two groups apart.";
-		if (!split.bimodal) {
-			return split.why === "tight"
-				? `Every route landed within ${split.spread.toFixed(1)}x of every other, so there are not two groups here to separate. Judged outright against ${seconds(split.absoluteMs)}s.`
-				: `**No step between neighbouring timings is wide enough to be a break rather than ordinary spacing, so there are no two groups to find here. Judged outright against ${seconds(split.absoluteMs)}s instead.**`;
-		}
-		const line = [
-			`Fastest route ${seconds(split.lo)}s, slowest ${seconds(split.hi)}s, a ${Math.round(split.spread)}x spread.`,
-			`The widest step between neighbouring timings is ${split.gap.ratio.toFixed(1)}x, ${seconds(split.gap.from)}s to ${seconds(split.gap.to)}s.`,
-		];
-		line.push(
-			split.groups === 2
-				? "That is the only break, so there are two groups: working below it, failing above."
-				: `${split.breaks.length} steps are wide enough to be breaks, giving ${split.groups} groups: ${split.breaks.map((b) => `${seconds(b.from)}s to ${seconds(b.to)}s (${b.ratio.toFixed(1)}x)`).join(", ")}. The slowest group fails, the fastest works, the rest are neither.`,
-		);
-		return line.join(" ");
+	// Where a leg's own timings separate. A leg whose routes all land together
+	// has no structure to read and is judged against the absolute threshold.
+	const groupsOf = (run) => {
+		const split = splits.get(run.label);
+		if (!split) return "—";
+		if (!split.bimodal) return `${seconds(split.lo)}–${seconds(split.hi)}s, one group`;
+		const edges = [split.lo, ...split.breaks.map((b) => b.to)];
+		const ends = [...split.breaks.map((b) => b.from), split.hi];
+		return edges
+			.map((from, i) => (from === ends[i] ? `${seconds(from)}s` : `${seconds(from)}–${seconds(ends[i])}s`))
+			.join(" · ");
 	};
 
 	const ids = [...new Set(runs.flatMap((r) => r.variants.map((v) => v.id)))];
@@ -831,19 +832,22 @@ if (args.compare) {
 					"variant is not evidence of health, it is a leg with nothing to report,",
 					"and it can come out of the matrix.",
 					"",
-					"Renders are read as a verdict, not a score. The groups are found in each",
-					"run rather than fixed in advance: the timings are sorted and cut at every",
-					"step wide enough to be a break. The slowest group fails, the fastest",
-					"works, and anything between them is reported as neither. Ratios decide,",
-					"so a uniformly faster or slower machine moves every group together and",
-					"the verdicts hold.",
+					"Renders are read as a verdict, not a score, and each leg is read on its",
+					"own timings: they are sorted and cut at every step wide enough to be a",
+					"break, the slowest group failing and the fastest working, with anything",
+					"between reported as neither. Ratios decide, so a uniformly faster or",
+					"slower machine moves its groups together and its verdict holds.",
 					"",
-					gapLine(),
+					"Legs are never pooled. The widest break across all of them would fall on",
+					"the platform boundary, which is the thing being measured, and every leg's",
+					`verdict would then depend on which others ran. A leg whose routes all land`,
+					`together has no groups to find and is judged against ${seconds(SLOW_THRESHOLD_MS)}s outright.`,
 					"",
-					"| platform | renders | symptoms |",
-					"| --- | --- | --- |",
+					"| platform | renders | groups | symptoms |",
+					"| --- | --- | --- | --- |",
 					...runs.map(
-						(r) => `| ${r.label} | ${rendersOf(r)} | ${symptomsOf(r).join(", ") || "**none**"} |`,
+						(r) =>
+							`| ${r.label} | ${rendersOf(r)} | ${groupsOf(r)} | ${symptomsOf(r).join(", ") || "**none**"} |`,
 					),
 					"",
 					(() => {
