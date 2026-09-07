@@ -81,6 +81,13 @@ Measured here by `pnpm dev-load`, median of three healthy responses a route, wit
 | `/bare-query` | 9.55s | 0.65s |
 | `/_emdash/admin` | 1.03s | 0.22s |
 
+Every route is warmed before it is timed. The harness polls `/_emdash/admin` until the
+server answers at all, which absorbs the compile the first load pays, then completes
+setup through `/_emdash/api/setup/dev-bypass?redirect=/_emdash/admin`, which renders
+admin a second time. Only then does it take the three samples. A sample counts only if
+it is a 200 over 1000 bytes that did not land on sign-in, so a redirect or an empty
+shell cannot pull a median down.
+
 Both arms of that table come from one linux machine, which is slower than the CI runners
 — they put the same baseline at 4.05s where this one puts it at 9.31s. Read the ratio
 rather than the seconds. The arms are only comparable to each other, and only CI's
