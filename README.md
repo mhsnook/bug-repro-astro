@@ -9,8 +9,12 @@ That is harmless on its own and expensive in company. This repository holds both
 
 | | what it shows | framework |
 | --- | --- | --- |
-| [`repro/bare-cloudflare-vite`](repro/bare-cloudflare-vite) | the **trigger**: 3 `hotUpdate` hooks per request, nothing edited | none |
-| the app at the root | the **cost**: 8 to 16 seconds a page, and 8× better with one line | Astro + EmDash |
+| [`repro/minimal`](repro/minimal) | the **trigger**: 3 `hotUpdate` hooks per request, nothing edited | none |
+| [`repro/emdash-slowdown`](repro/emdash-slowdown) | the **cost**: 8 to 16 seconds a page, and 8× better with one line | Astro + EmDash |
+
+Each is a standalone project with its own `package.json` and lockfile. They are
+deliberately not a pnpm workspace: `repro/minimal` is only worth anything if its
+lockfile contains no framework, and sharing one would quietly undo that.
 
 Two exhibits rather than one because the cost could not be synthesised. A 400-module
 graph with the same invalidation shape was measured at 30ms a request, with the
@@ -20,7 +24,7 @@ real graph, so the framework has to stay in order to show it.
 ## The trigger
 
 ```bash
-cd repro/bare-cloudflare-vite
+cd repro/minimal
 pnpm install
 node count-hot-updates.mjs
 ```
@@ -42,6 +46,7 @@ changed will do so on every request forever.
 ## The cost
 
 ```bash
+cd repro/emdash-slowdown
 pnpm install
 pnpm dev-load
 ```
@@ -106,7 +111,8 @@ There is no macOS data at all for the edit-driven path that #13425 is about.
 - [#13](../../issues/13) — the cold-start crash, still open: `astro/app/manifest` was
   fixed in `@astrojs/cloudflare` 14.3.0 and emdash 0.36.0, and `astro/logger/console`
   took its place. It costs most cold starts here a retry.
-- `repro-scripts/dev-load.mjs` — the harness behind `pnpm dev-load`. Counts only
+- `repro/emdash-slowdown/repro-scripts/dev-load.mjs` — the harness behind
+  `pnpm dev-load`. Counts only
   responses that were 200, cleared a byte floor, and did not land on the sign-in page,
   because a broken setup serves ~200-byte shells that look like a speedup.
 
